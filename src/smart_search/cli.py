@@ -33,6 +33,10 @@ COMMAND_ALIASES = {
     "exa-search": ["exa", "x"],
     "exa-similar": ["xs"],
     "zhipu-search": ["z", "zp"],
+    "anysearch-domains": ["as-domains"],
+    "anysearch-search": ["as-search", "as"],
+    "anysearch-extract": ["as-extract"],
+    "anysearch-batch": ["as-batch"],
     "context7-library": ["c7", "ctx7"],
     "context7-docs": ["c7d", "c7docs", "ctx7-docs"],
     "deep": ["dr"],
@@ -316,6 +320,8 @@ def _format_result_markdown(command: str, data: dict[str, Any], title: str) -> s
         lines.append(f"Base URL: {data.get('base_url')}")
     if data.get("provider"):
         lines.append(f"Provider: {data.get('provider')}")
+    if data.get("tool"):
+        lines.append(f"Tool: `{data.get('tool')}`")
     if data.get("elapsed_ms") is not None:
         lines.append(f"Elapsed: {_latency_text(data.get('elapsed_ms'))}")
 
@@ -324,6 +330,9 @@ def _format_result_markdown(command: str, data: dict[str, Any], title: str) -> s
     if results:
         lines.append("## Results")
         lines.extend(_markdown_table(["#", "Title", "URL / ID", "Summary"], _result_rows(results)))
+    elif data.get("content"):
+        lines.append("## Content")
+        lines.extend(_markdown_code_block(data.get("content")))
     elif data.get("ok"):
         lines.append("No results.")
     lines.extend(_error_lines(data))
@@ -664,6 +673,10 @@ def _format_markdown(command: str, data: dict[str, Any]) -> str:
         "exa-search": "Exa Search",
         "exa-similar": "Exa Similar Pages",
         "zhipu-search": "Zhipu Search",
+        "anysearch-domains": "AnySearch Domains",
+        "anysearch-search": "AnySearch Search",
+        "anysearch-extract": "AnySearch Extract",
+        "anysearch-batch": "AnySearch Batch",
         "context7-library": "Context7 Library Search",
     }
     if command in titles:
@@ -760,7 +773,17 @@ def _format_content(command: str, data: dict[str, Any]) -> str:
             return f"Setup {_status_label(data.get('ok'))}: {_error_summary(data)}\n"
         saved = data.get("saved") or data.get("values") or {}
         return f"Setup {_status_label(data.get('ok'))}: {len(saved)} values saved\n"
-    if command in {"map", "exa-search", "exa-similar", "zhipu-search", "context7-library"}:
+    if command in {
+        "map",
+        "exa-search",
+        "exa-similar",
+        "zhipu-search",
+        "anysearch-domains",
+        "anysearch-search",
+        "anysearch-extract",
+        "anysearch-batch",
+        "context7-library",
+    }:
         lines = _plain_result_lines(data)
         if data.get("error"):
             lines.append(f"Error: {_error_summary(data)}")
@@ -885,6 +908,7 @@ def _display_provider(provider: str, lang: str) -> str:
         "context7": "Context7",
         "tavily": "Tavily",
         "firecrawl": "Firecrawl",
+        "anysearch": "AnySearch",
     }
     return names.get(provider, provider)
 
@@ -993,6 +1017,11 @@ def _setup_status_from_values(values: dict[str, str]) -> dict[str, Any]:
             ],
             "fallback_chain": ["tavily", "firecrawl"],
         },
+        "vertical_search": {
+            "configured": ["anysearch"] if has("ANYSEARCH_API_KEY") else [],
+            "fallback_chain": ["anysearch"],
+            "experimental": True,
+        },
     }
     for item in status.values():
         item["ok"] = bool(item["configured"])
@@ -1014,8 +1043,9 @@ def _write_setup_status(status: dict[str, Any], lang: str, *, final: bool = Fals
         "docs_search": _t(lang, "docs_search 文档搜索", "docs_search documentation search"),
         "web_fetch": _t(lang, "web_fetch 网页抓取", "web_fetch page fetch"),
         "web_search": _t(lang, "web_search 网页补强", "web_search web reinforcement"),
+        "vertical_search": _t(lang, "vertical_search 垂直搜索", "vertical_search vertical search"),
     }
-    for capability in ("main_search", "docs_search", "web_fetch", "web_search"):
+    for capability in ("main_search", "docs_search", "web_fetch", "web_search", "vertical_search"):
         item = status.get(capability, {})
         configured = item.get("configured") or []
         configured_text = ", ".join(_display_provider(provider, lang) for provider in configured)
@@ -1301,6 +1331,18 @@ def _prompt_main_search(values: dict[str, str], current: dict[str, str], lang: s
             optional=True,
             lang=lang,
         )
+        stream_default = current.get("OPENAI_COMPATIBLE_STREAM", "")
+        if _prompt_yes_no(
+            _t(
+                lang,
+                f"是否启用 OpenAI-compatible stream=true？用于部分中转长请求兼容 [{stream_default or 'false'}]: ",
+                f"Enable OpenAI-compatible stream=true for relay long-request compatibility [{stream_default or 'false'}]: ",
+            ),
+            default=(str(stream_default).lower() in {"true", "1", "yes"}),
+        ):
+            values["OPENAI_COMPATIBLE_STREAM"] = "true"
+        elif stream_default:
+            values["OPENAI_COMPATIBLE_STREAM"] = "false"
 
 
 def _prompt_docs_search(values: dict[str, str], current: dict[str, str], lang: str) -> None:
@@ -1659,6 +1701,7 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("OPENAI_COMPATIBLE_API_URL", "OpenAI-compatible API URL", True),
         ("OPENAI_COMPATIBLE_API_KEY", "OpenAI-compatible API key", True),
         ("OPENAI_COMPATIBLE_MODEL", "OpenAI-compatible model", True),
+        ("OPENAI_COMPATIBLE_STREAM", "OpenAI-compatible stream mode (true/false)", True),
         ("SMART_SEARCH_VALIDATION_LEVEL", "Validation level (fast/balanced/strict)", True),
         ("SMART_SEARCH_FALLBACK_MODE", "Fallback mode (auto/off)", True),
         ("SMART_SEARCH_MINIMUM_PROFILE", "Minimum profile (standard/off)", True),
@@ -1671,6 +1714,9 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("TAVILY_API_KEY", "Tavily API key", True),
         ("FIRECRAWL_API_URL", "Firecrawl API URL", True),
         ("FIRECRAWL_API_KEY", "Firecrawl API key", True),
+        ("ANYSEARCH_API_URL", "AnySearch MCP API URL", True),
+        ("ANYSEARCH_API_KEY", "AnySearch API key", True),
+        ("ANYSEARCH_TIMEOUT_SECONDS", "AnySearch timeout seconds", True),
     ]
     for key, label, optional in prompts:
         if values[key]:
@@ -1687,17 +1733,19 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
 
 async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "search":
+        search_kwargs = {
+            "platform": args.platform,
+            "model": args.model,
+            "extra_sources": args.extra_sources,
+            "validation": args.validation,
+            "fallback": args.fallback,
+            "providers": args.providers,
+        }
+        if args.stream is not None:
+            search_kwargs["stream"] = args.stream
         try:
             data = await asyncio.wait_for(
-                service.search(
-                    args.query,
-                    platform=args.platform,
-                    model=args.model,
-                    extra_sources=args.extra_sources,
-                    validation=args.validation,
-                    fallback=args.fallback,
-                    providers=args.providers,
-                ),
+                service.search(args.query, **search_kwargs),
                 timeout=args.timeout,
             )
         except asyncio.TimeoutError:
@@ -1743,6 +1791,23 @@ async def _run_async(args: argparse.Namespace) -> int:
             content_size=args.content_size,
         )
         return _print_result("zhipu-search", data, args.format, args.output)
+    if args.command == "anysearch-domains":
+        data = await service.anysearch_domains(args.domain)
+        return _print_result("anysearch-domains", data, args.format, args.output)
+    if args.command == "anysearch-search":
+        data = await service.anysearch_search(
+            args.query,
+            domain=args.domain,
+            sub_domain=args.sub_domain,
+            max_results=args.max_results,
+        )
+        return _print_result("anysearch-search", data, args.format, args.output)
+    if args.command == "anysearch-extract":
+        data = await service.anysearch_extract(args.url, max_length=args.max_length)
+        return _print_result("anysearch-extract", data, args.format, args.output)
+    if args.command == "anysearch-batch":
+        data = await service.anysearch_batch(args.queries, max_results=args.max_results)
+        return _print_result("anysearch-batch", data, args.format, args.output)
     if args.command == "context7-library":
         data = await service.context7_library(args.name, args.query)
         return _print_result("context7-library", data, args.format, args.output)
@@ -1804,6 +1869,7 @@ def _run_setup(args: argparse.Namespace) -> int:
         "OPENAI_COMPATIBLE_API_URL": args.openai_compatible_api_url,
         "OPENAI_COMPATIBLE_API_KEY": args.openai_compatible_api_key,
         "OPENAI_COMPATIBLE_MODEL": args.openai_compatible_model,
+        "OPENAI_COMPATIBLE_STREAM": args.openai_compatible_stream,
         "SMART_SEARCH_VALIDATION_LEVEL": args.validation_level,
         "SMART_SEARCH_FALLBACK_MODE": args.fallback_mode,
         "SMART_SEARCH_MINIMUM_PROFILE": args.minimum_profile,
@@ -1816,6 +1882,9 @@ def _run_setup(args: argparse.Namespace) -> int:
         "TAVILY_API_KEY": args.tavily_key,
         "FIRECRAWL_API_URL": _normalize_firecrawl_api_url(args.firecrawl_api_url),
         "FIRECRAWL_API_KEY": args.firecrawl_key,
+        "ANYSEARCH_API_URL": _normalize_custom_base_url(args.anysearch_api_url),
+        "ANYSEARCH_API_KEY": args.anysearch_key,
+        "ANYSEARCH_TIMEOUT_SECONDS": args.anysearch_timeout,
     }
 
     lang = args.lang if args.lang in {"zh", "en"} else "zh"
@@ -1920,6 +1989,9 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--validation", choices=["fast", "balanced", "strict"], default="")
     search_parser.add_argument("--fallback", choices=["auto", "off"], default="")
     search_parser.add_argument("--providers", default="auto")
+    stream_group = search_parser.add_mutually_exclusive_group()
+    stream_group.add_argument("--stream", dest="stream", action="store_true", default=None, help="Use stream=true for OpenAI-compatible main search.")
+    stream_group.add_argument("--no-stream", dest="stream", action="store_false", help="Force stream=false for OpenAI-compatible main search.")
     search_parser.add_argument("--timeout", type=float, default=90, metavar="SECONDS", help="Hard timeout in seconds.")
     _add_format_args(search_parser)
 
@@ -1972,6 +2044,47 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_parser.add_argument("--search-domain-filter", default="")
     zhipu_parser.add_argument("--content-size", choices=["medium", "high"], default="medium")
     _add_format_args(zhipu_parser)
+
+    anysearch_domains_parser = sub.add_parser(
+        "anysearch-domains",
+        aliases=COMMAND_ALIASES["anysearch-domains"],
+        help="List AnySearch vertical search domains.",
+    )
+    anysearch_domains_parser.set_defaults(command="anysearch-domains")
+    anysearch_domains_parser.add_argument("domain", nargs="?", default="")
+    _add_format_args(anysearch_domains_parser)
+
+    anysearch_search_parser = sub.add_parser(
+        "anysearch-search",
+        aliases=COMMAND_ALIASES["anysearch-search"],
+        help="Run experimental AnySearch vertical/general search.",
+    )
+    anysearch_search_parser.set_defaults(command="anysearch-search")
+    anysearch_search_parser.add_argument("query")
+    anysearch_search_parser.add_argument("--domain", default="")
+    anysearch_search_parser.add_argument("--sub-domain", default="")
+    anysearch_search_parser.add_argument("--max-results", type=int, default=5)
+    _add_format_args(anysearch_search_parser)
+
+    anysearch_extract_parser = sub.add_parser(
+        "anysearch-extract",
+        aliases=COMMAND_ALIASES["anysearch-extract"],
+        help="Extract a URL through AnySearch experimental extract.",
+    )
+    anysearch_extract_parser.set_defaults(command="anysearch-extract")
+    anysearch_extract_parser.add_argument("url")
+    anysearch_extract_parser.add_argument("--max-length", type=int, default=20000)
+    _add_format_args(anysearch_extract_parser)
+
+    anysearch_batch_parser = sub.add_parser(
+        "anysearch-batch",
+        aliases=COMMAND_ALIASES["anysearch-batch"],
+        help="Run up to 5 AnySearch queries in parallel.",
+    )
+    anysearch_batch_parser.set_defaults(command="anysearch-batch")
+    anysearch_batch_parser.add_argument("queries", nargs="+")
+    anysearch_batch_parser.add_argument("--max-results", type=int, default=3)
+    _add_format_args(anysearch_batch_parser)
 
     context7_library_parser = sub.add_parser(
         "context7-library",
@@ -2061,6 +2174,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--openai-compatible-api-url", default="", help="Save OPENAI_COMPATIBLE_API_URL.")
     setup_parser.add_argument("--openai-compatible-api-key", default="", help="Save OPENAI_COMPATIBLE_API_KEY.")
     setup_parser.add_argument("--openai-compatible-model", default="", help="Save OPENAI_COMPATIBLE_MODEL.")
+    setup_parser.add_argument("--openai-compatible-stream", default="", help="Save OPENAI_COMPATIBLE_STREAM.")
     setup_parser.add_argument("--validation-level", default="", help="Save SMART_SEARCH_VALIDATION_LEVEL.")
     setup_parser.add_argument("--fallback-mode", default="", help="Save SMART_SEARCH_FALLBACK_MODE.")
     setup_parser.add_argument("--minimum-profile", default="", help="Save SMART_SEARCH_MINIMUM_PROFILE.")
@@ -2073,6 +2187,9 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--tavily-key", default="", help="Save TAVILY_API_KEY.")
     setup_parser.add_argument("--firecrawl-api-url", default="", help="Save FIRECRAWL_API_URL.")
     setup_parser.add_argument("--firecrawl-key", default="", help="Save FIRECRAWL_API_KEY.")
+    setup_parser.add_argument("--anysearch-api-url", default="", help="Save ANYSEARCH_API_URL.")
+    setup_parser.add_argument("--anysearch-key", default="", help="Save ANYSEARCH_API_KEY.")
+    setup_parser.add_argument("--anysearch-timeout", default="", help="Save ANYSEARCH_TIMEOUT_SECONDS.")
     _add_format_args(setup_parser)
 
     config_parser = sub.add_parser(

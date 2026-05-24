@@ -248,3 +248,48 @@ def test_zhipu_setup_contract_public_and_packaged_assets_match():
     for marker in ["--zhipu-api-url", "--zhipu-search-engine"]:
         assert marker in public_contract
         assert marker in packaged_contract
+
+
+def test_streaming_and_anysearch_contract_public_and_packaged_assets_match():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    public_text = _read_skill_tree(PUBLIC_SKILL_DIR)
+    packaged_text = _read_skill_tree(PACKAGED_SKILL_DIR)
+    public_contract = (PUBLIC_SKILL_DIR / "references" / "cli-contract.md").read_text(encoding="utf-8")
+    packaged_contract = (PACKAGED_SKILL_DIR / "references" / "cli-contract.md").read_text(encoding="utf-8")
+
+    required_markers = [
+        "OPENAI_COMPATIBLE_STREAM",
+        "--stream",
+        "--no-stream",
+        "ANYSEARCH_API_URL",
+        "ANYSEARCH_API_KEY",
+        "ANYSEARCH_TIMEOUT_SECONDS",
+        "anysearch-domains",
+        "anysearch-search",
+        "anysearch-extract",
+        "anysearch-batch",
+        "vertical_search",
+        "not part of the `web_search` fallback",
+        "not required by the `standard` minimum profile",
+    ]
+    for marker in required_markers:
+        assert marker in readme
+        assert marker in public_text
+        assert marker in packaged_text
+        assert marker in public_contract
+        assert marker in packaged_contract
+
+    zh_required_markers = [
+        "OPENAI_COMPATIBLE_STREAM",
+        "ANYSEARCH_API_URL",
+        "ANYSEARCH_API_KEY",
+        "ANYSEARCH_TIMEOUT_SECONDS",
+        "anysearch-domains",
+        "anysearch-search",
+        "vertical_search",
+        "不进入 `web_search` 兜底链",
+        "不是 `standard` 最低配置要求",
+    ]
+    for marker in zh_required_markers:
+        assert marker in readme_zh

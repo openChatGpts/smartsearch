@@ -16,17 +16,21 @@
 
 ## Commands
 
-- `smart-search search QUERY [--platform NAME] [--model ID] [--extra-sources N] [--validation fast|balanced|strict] [--fallback auto|off] [--providers auto|CSV] [--timeout SECONDS] [--format json|markdown|content] [--output PATH]`
+- `smart-search search QUERY [--platform NAME] [--model ID] [--extra-sources N] [--validation fast|balanced|strict] [--fallback auto|off] [--providers auto|CSV] [--stream|--no-stream] [--timeout SECONDS] [--format json|markdown|content] [--output PATH]`
 - `smart-search fetch URL [--format json|markdown|content] [--output PATH]`
 - `smart-search exa-search QUERY [--num-results N] [--search-type neural|keyword|auto] [--include-text] [--include-highlights] [--start-published-date YYYY-MM-DD] [--include-domains DOMAIN...] [--exclude-domains DOMAIN...] [--category NAME] [--format json|markdown|content] [--output PATH]`
 - `smart-search exa-similar URL [--num-results N] [--format json|markdown|content] [--output PATH]`
 - `smart-search zhipu-search QUERY [--count N] [--search-engine NAME] [--search-recency-filter VALUE] [--search-domain-filter DOMAIN] [--content-size medium|high] [--format json|markdown|content] [--output PATH]`
+- `smart-search anysearch-domains [DOMAIN] [--format json|markdown|content] [--output PATH]`
+- `smart-search anysearch-search QUERY [--domain DOMAIN] [--sub-domain SUB_DOMAIN] [--max-results N] [--format json|markdown|content] [--output PATH]`
+- `smart-search anysearch-extract URL [--max-length N] [--format json|markdown|content] [--output PATH]`
+- `smart-search anysearch-batch QUERY... [--max-results N] [--format json|markdown|content] [--output PATH]`
 - `smart-search context7-library NAME [QUERY] [--format json|markdown|content] [--output PATH]`
 - `smart-search context7-docs LIBRARY_ID QUERY [--format json|markdown|content] [--output PATH]`
 - `smart-search deep QUERY [--budget quick|standard|deep] [--evidence-dir PATH] [--format json|markdown|content] [--output PATH]`
 - `smart-search map URL [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--format json|markdown|content] [--output PATH]`
 - `smart-search doctor [--format json|markdown|content] [--output PATH]`
-- `smart-search setup [--lang zh|en] [--advanced] [--non-interactive] [--skip-skills] [--install-skills CSV] [--skills-root PATH] [--xai-api-url URL] [--xai-api-key KEY] [--xai-model ID] [--xai-tools-explicit CSV] [--openai-compatible-api-url URL] [--openai-compatible-api-key KEY] [--openai-compatible-model ID] [--validation-level fast|balanced|strict] [--fallback-mode auto|off] [--minimum-profile standard|off] [--exa-key KEY] [--context7-key KEY] [--zhipu-key KEY] [--zhipu-api-url URL] [--zhipu-search-engine ENGINE] [--tavily-api-url URL] [--tavily-key KEY] [--firecrawl-api-url URL] [--firecrawl-key KEY] [--format json|markdown|content] [--output PATH]`
+- `smart-search setup [--lang zh|en] [--advanced] [--non-interactive] [--skip-skills] [--install-skills CSV] [--skills-root PATH] [--xai-api-url URL] [--xai-api-key KEY] [--xai-model ID] [--xai-tools-explicit CSV] [--openai-compatible-api-url URL] [--openai-compatible-api-key KEY] [--openai-compatible-model ID] [--openai-compatible-stream true|false] [--validation-level fast|balanced|strict] [--fallback-mode auto|off] [--minimum-profile standard|off] [--exa-key KEY] [--context7-key KEY] [--zhipu-key KEY] [--zhipu-api-url URL] [--zhipu-search-engine ENGINE] [--tavily-api-url URL] [--tavily-key KEY] [--firecrawl-api-url URL] [--firecrawl-key KEY] [--anysearch-api-url URL] [--anysearch-key KEY] [--anysearch-timeout SECONDS] [--format json|markdown|content] [--output PATH]`
 - `smart-search config path [--format json|markdown|content] [--output PATH]`
 - `smart-search config list [--format json|markdown|content] [--output PATH]`
 - `smart-search config set KEY VALUE [--format json|markdown|content] [--output PATH]`
@@ -50,6 +54,10 @@ Top-level aliases must normalize to the same service behavior as their full comm
 | `exa-search` | `exa`, `x` |
 | `exa-similar` | `xs` |
 | `zhipu-search` | `z`, `zp` |
+| `anysearch-domains` | `as-domains` |
+| `anysearch-search` | `as-search`, `as` |
+| `anysearch-extract` | `as-extract` |
+| `anysearch-batch` | `as-batch` |
 | `context7-library` | `c7`, `ctx7` |
 | `context7-docs` | `c7d`, `c7docs`, `ctx7-docs` |
 | `deep` | `dr` |
@@ -77,7 +85,7 @@ Successful search output includes `ok`, `query`, `primary_api_mode`, `content`, 
 
 `--format json` is the stable machine-readable contract for agents and scripts. JSON output remains parseable and uses readable non-ASCII text when the terminal encoding supports it.
 
-`--format markdown` is the human-readable report format. `doctor --format markdown` must render a detailed diagnostic report with overall status, active/default/legacy config paths, log path resolution, file-logging status, masked config values with sources, minimum profile, capability status, main-search provider checks, provider connectivity checks, model metadata, and full long error/message detail instead of falling back to raw JSON. Provider list commands such as `exa-search`, `exa-similar`, `zhipu-search`, `context7-library`, and `map` render result lists or a clear no-results message.
+`--format markdown` is the human-readable report format. `doctor --format markdown` must render a detailed diagnostic report with overall status, active/default/legacy config paths, log path resolution, file-logging status, masked config values with sources, minimum profile, capability status, main-search provider checks, provider connectivity checks, model metadata, and full long error/message detail instead of falling back to raw JSON. Provider list commands such as `exa-search`, `exa-similar`, `zhipu-search`, `anysearch-*`, `context7-library`, and `map` render result lists or a clear no-results message.
 
 `--format content` prints only the `content` field for content-bearing commands such as `search`, `fetch`, and `context7-docs`. Commands without a `content` field, including `doctor`, `smoke`, `config`, and `model`, must print a compact non-empty text summary rather than an empty stdout.
 
@@ -107,6 +115,22 @@ Zhipu Web Search API setup:
 - `zhipu-search` corresponds to Zhipu Web Search API, not Zhipu Chat Completions `tools=[web_search]`, not Search Agent, and not the MCP Server.
 - `TAVILY_API_URL` only affects Tavily and does not proxy Zhipu.
 - `TAVILY_TIMEOUT_SECONDS` controls the Tavily `doctor` connectivity timeout. It defaults to `30` so slower pooled/community endpoints are not incorrectly marked unhealthy by the diagnostic check.
+
+OpenAI-compatible streaming:
+
+- `OPENAI_COMPATIBLE_STREAM` defaults to `false` and accepts `true`, `1`, or `yes` as true.
+- `search --stream` and `search --no-stream` override `OPENAI_COMPATIBLE_STREAM` for the current invocation.
+- Streaming applies only to OpenAI-compatible `search()` and provider-side `fetch()` calls. `describe_url()` and `rank_sources()` stay non-streaming. xAI Responses behavior is unchanged.
+
+AnySearch experimental output:
+
+- AnySearch uses JSON-RPC 2.0 `tools/call` at `ANYSEARCH_API_URL`, default `https://api.anysearch.com/mcp`.
+- `ANYSEARCH_API_KEY` is optional. If configured, requests include `Authorization: Bearer ...`; if missing, anonymous requests are allowed.
+- `ANYSEARCH_TIMEOUT_SECONDS` defaults to `30`.
+- HTTP 200 responses with `result.isError=true` must return `ok=false`, `error_type=provider_error`, and no successful source results.
+- Markdown URL/title/snippet candidates should be parsed into `results`, while raw text remains in `content` and `raw_content`.
+- Structured results without URLs must be preserved as raw/structured evidence, not dropped.
+- `anysearch-batch` accepts at most 5 queries and returns `error_type=parameter_error` without sending a request when the limit is exceeded.
 
 Exa search output includes `ok`, `query`, `search_type`, `results`, `total`, and `elapsed_ms` when successful.
 
@@ -223,6 +247,9 @@ Provider endpoint setup:
 - `TAVILY_API_URL` defaults to `https://api.tavily.com`.
 - `TAVILY_TIMEOUT_SECONDS` defaults to `30` and applies to Tavily `doctor`
   connectivity checks.
+- `ANYSEARCH_API_URL` defaults to `https://api.anysearch.com/mcp`.
+- `ANYSEARCH_TIMEOUT_SECONDS` defaults to `30` and applies to experimental
+  AnySearch JSON-RPC calls.
 - Tavily Hikari / pooled endpoints must use the REST facade base
   `https://<host>/api/tavily`; `/mcp` is not a REST provider base.
 - Setup normalizes a Hikari root host or `/mcp` URL to
@@ -237,10 +264,12 @@ Search timeout output uses `ok=false`, `error_type=network_error`, includes the 
 
 - `search` builds `main_search` from peer providers only: `XAI_API_KEY` registers official xAI Responses, while `OPENAI_COMPATIBLE_API_URL` + `OPENAI_COMPATIBLE_API_KEY` registers OpenAI-compatible Chat Completions.
 - Official xAI calls use the Responses API `/responses` route through `XAI_*`. Compatible relays/gateways use Chat Completions `/chat/completions` through `OPENAI_COMPATIBLE_*`.
+- `OPENAI_COMPATIBLE_STREAM` and `search --stream/--no-stream` affect only the OpenAI-compatible Chat Completions transport for search/fetch. They do not change xAI Responses or provider-internal ranking/URL description tasks.
 - Legacy `SMART_SEARCH_API_URL`, `SMART_SEARCH_API_KEY`, `SMART_SEARCH_API_MODE`, `SMART_SEARCH_MODEL`, and `SMART_SEARCH_XAI_TOOLS` are unsupported config keys. `config set` / `config unset` must return a parameter error for them.
 - `XAI_TOOLS` applies only to xAI Responses mode and supports only `web_search` and `x_search`.
 - Chat Completions mode must not send xAI `web_search` / `x_search` tools or legacy `search_parameters`; xAI Chat Completions Live Search is deprecated.
 - Standard minimum profile requires `main_search`, `docs_search`, and fetch capability. Missing required capabilities produce a configuration error.
+- Optional experimental `vertical_search` may report AnySearch when `ANYSEARCH_API_KEY` is configured, but it is not part of the `web_search` fallback and is not required by the `standard` minimum profile.
 - Same-capability fallback is allowed; cross-capability fallback is not. Context7 is not used for unrelated broad web queries, and page extraction providers are not used as docs search providers.
 - `main_search`: xAI Responses first for Grok/xAI, then OpenAI-compatible answer fallback when that peer provider is separately configured and `--fallback auto` is active.
 - `web_search`: Zhipu first when routed in, then Tavily / Firecrawl source search when configured.
@@ -253,6 +282,7 @@ Search timeout output uses `ok=false`, `error_type=network_error`, includes the 
 - `map` uses Tavily only.
 - `exa-search` and `exa-similar` use Exa only.
 - `zhipu-search` uses Zhipu only.
+- `anysearch-domains`, `anysearch-search`, `anysearch-extract`, and `anysearch-batch` use AnySearch only and do not participate in default fallback chains.
 - `context7-library` and `context7-docs` use Context7 only.
 - Runtime config priority is environment variables first, then local config file, then defaults.
 - `setup` and `config` read/write the local Smart Search config file and do not call providers.

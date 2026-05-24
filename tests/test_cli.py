@@ -52,6 +52,10 @@ def test_each_subcommand_help_exits_successfully(capsys):
         ["exa-search", "--help"],
         ["exa-similar", "--help"],
         ["zhipu-search", "--help"],
+        ["anysearch-domains", "--help"],
+        ["anysearch-search", "--help"],
+        ["anysearch-extract", "--help"],
+        ["anysearch-batch", "--help"],
         ["context7-library", "--help"],
         ["context7-docs", "--help"],
         ["deep", "--help"],
@@ -92,6 +96,11 @@ def test_command_aliases_parse_to_canonical_commands():
         (["xs", "https://example.com"], "exa-similar"),
         (["z", "query"], "zhipu-search"),
         (["zp", "query"], "zhipu-search"),
+        (["as-domains"], "anysearch-domains"),
+        (["as-search", "query"], "anysearch-search"),
+        (["as", "query"], "anysearch-search"),
+        (["as-extract", "https://example.com"], "anysearch-extract"),
+        (["as-batch", "a", "b"], "anysearch-batch"),
         (["c7", "react"], "context7-library"),
         (["ctx7", "react"], "context7-library"),
         (["c7d", "/facebook/react", "hooks"], "context7-docs"),
@@ -137,6 +146,8 @@ def test_search_help_exposes_timeout(capsys):
 
     out = capsys.readouterr().out
     assert "--timeout SECONDS" in out
+    assert "--stream" in out
+    assert "--no-stream" in out
 
 
 def test_search_outputs_json_and_file(monkeypatch, capsys):
@@ -167,6 +178,27 @@ def test_search_outputs_json_and_file(monkeypatch, capsys):
     assert written["path"] == output
     assert stdout_data["sources_count"] == 1
     assert file_data["content"] == "Answer"
+
+
+def test_search_stream_flags_override_only_when_present(monkeypatch, capsys):
+    captured = []
+
+    async def fake_search(query, **kwargs):
+        captured.append(kwargs)
+        return {"ok": True, "content": "Answer", "sources": [], "sources_count": 0}
+
+    monkeypatch.setattr(cli.service, "search", fake_search)
+
+    assert cli.main(["search", "query"]) == cli.EXIT_OK
+    json.loads(capsys.readouterr().out)
+    assert cli.main(["search", "query", "--stream"]) == cli.EXIT_OK
+    json.loads(capsys.readouterr().out)
+    assert cli.main(["search", "query", "--no-stream"]) == cli.EXIT_OK
+    json.loads(capsys.readouterr().out)
+
+    assert "stream" not in captured[0]
+    assert captured[1]["stream"] is True
+    assert captured[2]["stream"] is False
 
 
 def test_search_json_outputs_readable_chinese(monkeypatch, capsys):
@@ -1047,6 +1079,7 @@ def test_non_content_commands_have_non_empty_content_fallback():
         "config": {"ok": True, "config_file": "C:/tmp/config.json"},
         "model": {"ok": True, "xai_model": "grok"},
         "exa-search": {"ok": True, "results": [{"title": "Example", "url": "https://example.com"}]},
+        "anysearch-search": {"ok": True, "provider": "anysearch", "results": [{"title": "AnySearch", "url": ""}]},
     }
     for command, data in cases.items():
         rendered = cli._render(command, data, "content")
@@ -1079,6 +1112,8 @@ def test_setup_non_interactive_saves_values(monkeypatch, capsys):
         "relay-test-secret",
         "--openai-compatible-model",
         "relay-model",
+        "--openai-compatible-stream",
+        "true",
         "--validation-level",
         "balanced",
         "--fallback-mode",
@@ -1101,6 +1136,12 @@ def test_setup_non_interactive_saves_values(monkeypatch, capsys):
         "firecrawl.example.com/v2",
         "--firecrawl-key",
         "firecrawl-secret",
+        "--anysearch-api-url",
+        "anysearch.example.com/mcp",
+        "--anysearch-key",
+        "as-test-secret",
+        "--anysearch-timeout",
+        "9",
     ])
 
     out = capsys.readouterr().out
@@ -1111,6 +1152,7 @@ def test_setup_non_interactive_saves_values(monkeypatch, capsys):
     assert saved["OPENAI_COMPATIBLE_API_URL"] == "https://relay.example.com/v1"
     assert saved["OPENAI_COMPATIBLE_API_KEY"] == "relay-test-secret"
     assert saved["OPENAI_COMPATIBLE_MODEL"] == "relay-model"
+    assert saved["OPENAI_COMPATIBLE_STREAM"] == "true"
     assert saved["SMART_SEARCH_VALIDATION_LEVEL"] == "balanced"
     assert saved["SMART_SEARCH_FALLBACK_MODE"] == "auto"
     assert saved["SMART_SEARCH_MINIMUM_PROFILE"] == "standard"
@@ -1122,8 +1164,12 @@ def test_setup_non_interactive_saves_values(monkeypatch, capsys):
     assert saved["TAVILY_API_KEY"] == "th-test-secret"
     assert saved["FIRECRAWL_API_URL"] == "https://firecrawl.example.com/v2"
     assert saved["FIRECRAWL_API_KEY"] == "firecrawl-secret"
+    assert saved["ANYSEARCH_API_URL"] == "https://anysearch.example.com/mcp"
+    assert saved["ANYSEARCH_API_KEY"] == "as-test-secret"
+    assert saved["ANYSEARCH_TIMEOUT_SECONDS"] == "9"
     assert "xai-test-secret" not in out
     assert "th-test-secret" not in out
+    assert "as-test-secret" not in out
 
 
 def test_setup_non_interactive_rejects_legacy_flags(capsys):
@@ -1511,7 +1557,7 @@ def test_setup_guided_masks_configured_url_defaults(monkeypatch, capsys):
         "OPENAI_COMPATIBLE_API_URL": "https://private-relay.example.com/v1",
         "OPENAI_COMPATIBLE_API_KEY": "relay-old-secret",
     }
-    answers = iter(["openai", "", "", "skip", "skip", "n", "n"])
+    answers = iter(["openai", "", "", "", "skip", "skip", "n", "n"])
     secrets = iter([""])
 
     monkeypatch.setattr(cli.service, "config_set", lambda key, value: {"ok": True, "key": key, "value": "***"})
@@ -1530,7 +1576,7 @@ def test_setup_guided_masks_configured_url_defaults(monkeypatch, capsys):
 
 def test_setup_guided_main_search_can_save_openai_compatible_peer(monkeypatch, capsys):
     saved = {}
-    answers = iter(["openai", "https://relay.example.com/v1", "", "skip", "skip", "n", "n"])
+    answers = iter(["openai", "https://relay.example.com/v1", "", "", "skip", "skip", "n", "n"])
     secrets = iter(["relay-test-secret"])
 
     def fake_config_set(key, value):
@@ -1560,7 +1606,7 @@ def test_setup_guided_main_search_can_save_openai_compatible_peer(monkeypatch, c
 
 def test_setup_guided_main_search_can_save_both_peer_providers(monkeypatch, capsys):
     saved = {}
-    answers = iter(["both", "", "https://relay.example.com/v1", "", "skip", "skip", "n", "n"])
+    answers = iter(["both", "", "https://relay.example.com/v1", "", "", "skip", "skip", "n", "n"])
     secrets = iter(["xai-test-secret", "relay-test-secret"])
 
     def fake_config_set(key, value):
@@ -1639,6 +1685,47 @@ def test_smoke_command_uses_service(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["mode"] == "mock"
 
 
+def test_anysearch_commands_use_service_wrappers(monkeypatch, capsys):
+    calls = []
+
+    async def fake_domains(domain=""):
+        calls.append(("domains", domain))
+        return {"ok": True, "provider": "anysearch", "tool": "list_domains", "results": []}
+
+    async def fake_search(query, domain="", sub_domain="", max_results=5):
+        calls.append(("search", query, domain, sub_domain, max_results))
+        return {"ok": True, "provider": "anysearch", "tool": "search", "query": query, "results": []}
+
+    async def fake_extract(url, max_length=20000):
+        calls.append(("extract", url, max_length))
+        return {"ok": True, "provider": "anysearch", "tool": "extract", "url": url, "content": "# Page"}
+
+    async def fake_batch(queries, max_results=3):
+        calls.append(("batch", queries, max_results))
+        return {"ok": True, "provider": "anysearch", "tool": "batch_search", "results": []}
+
+    monkeypatch.setattr(cli.service, "anysearch_domains", fake_domains)
+    monkeypatch.setattr(cli.service, "anysearch_search", fake_search)
+    monkeypatch.setattr(cli.service, "anysearch_extract", fake_extract)
+    monkeypatch.setattr(cli.service, "anysearch_batch", fake_batch)
+
+    assert cli.main(["anysearch-domains", "security"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "list_domains"
+    assert cli.main(["as", "CVE-2024-3094", "--domain", "security.cve", "--sub-domain", "xz", "--max-results", "2"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["query"] == "CVE-2024-3094"
+    assert cli.main(["as-extract", "https://example.com", "--max-length", "123"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["url"] == "https://example.com"
+    assert cli.main(["as-batch", "a", "b", "--max-results", "1"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "batch_search"
+
+    assert calls == [
+        ("domains", "security"),
+        ("search", "CVE-2024-3094", "security.cve", "xz", 2),
+        ("extract", "https://example.com", 123),
+        ("batch", ["a", "b"], 1),
+    ]
+
+
 def test_provider_and_smoke_aliases_use_canonical_commands(monkeypatch, capsys):
     async def fake_exa_search(*args, **kwargs):
         return {"ok": True, "provider": "exa"}
@@ -1652,6 +1739,18 @@ def test_provider_and_smoke_aliases_use_canonical_commands(monkeypatch, capsys):
     async def fake_context7_docs(*args, **kwargs):
         return {"ok": True, "provider": "context7-docs"}
 
+    async def fake_anysearch_domains(*args, **kwargs):
+        return {"ok": True, "provider": "anysearch", "tool": "list_domains"}
+
+    async def fake_anysearch_search(*args, **kwargs):
+        return {"ok": True, "provider": "anysearch", "tool": "search"}
+
+    async def fake_anysearch_extract(*args, **kwargs):
+        return {"ok": True, "provider": "anysearch", "tool": "extract"}
+
+    async def fake_anysearch_batch(*args, **kwargs):
+        return {"ok": True, "provider": "anysearch", "tool": "batch_search"}
+
     async def fake_smoke(mode="mock"):
         return {"ok": True, "mode": mode, "failed_cases": [], "cases": []}
 
@@ -1659,12 +1758,24 @@ def test_provider_and_smoke_aliases_use_canonical_commands(monkeypatch, capsys):
     monkeypatch.setattr(cli.service, "zhipu_search", fake_zhipu_search)
     monkeypatch.setattr(cli.service, "context7_library", fake_context7_library)
     monkeypatch.setattr(cli.service, "context7_docs", fake_context7_docs)
+    monkeypatch.setattr(cli.service, "anysearch_domains", fake_anysearch_domains)
+    monkeypatch.setattr(cli.service, "anysearch_search", fake_anysearch_search)
+    monkeypatch.setattr(cli.service, "anysearch_extract", fake_anysearch_extract)
+    monkeypatch.setattr(cli.service, "anysearch_batch", fake_anysearch_batch)
     monkeypatch.setattr(cli.service, "smoke", fake_smoke)
 
     assert cli.main(["exa", "query"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["provider"] == "exa"
     assert cli.main(["z", "query"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["provider"] == "zhipu"
+    assert cli.main(["as-domains"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "list_domains"
+    assert cli.main(["as-search", "query"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "search"
+    assert cli.main(["as-extract", "https://example.com"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "extract"
+    assert cli.main(["as-batch", "a", "b"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["tool"] == "batch_search"
     assert cli.main(["c7", "react"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["provider"] == "context7-library"
     assert cli.main(["c7docs", "/facebook/react", "hooks"]) == cli.EXIT_OK

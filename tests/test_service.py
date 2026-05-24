@@ -18,8 +18,12 @@ def _reset_config(monkeypatch, tmp_path):
         "OPENAI_COMPATIBLE_API_URL",
         "OPENAI_COMPATIBLE_API_KEY",
         "OPENAI_COMPATIBLE_MODEL",
+        "OPENAI_COMPATIBLE_STREAM",
         "EXA_API_KEY",
         "EXA_BASE_URL",
+        "ANYSEARCH_API_KEY",
+        "ANYSEARCH_API_URL",
+        "ANYSEARCH_TIMEOUT_SECONDS",
         "ZHIPU_API_KEY",
         "ZHIPU_API_URL",
         "ZHIPU_SEARCH_ENGINE",
@@ -85,6 +89,35 @@ def test_config_file_supplies_explicit_main_settings(monkeypatch, tmp_path):
     assert service.config.openai_compatible_api_url == "https://relay.example.com/v1"
     assert service.config.openai_compatible_api_key == "relay-config-secret"
     assert service.config.openai_compatible_model == "relay-config-model"
+
+
+def test_openai_compatible_stream_config_defaults_and_boolean_styles(monkeypatch, tmp_path):
+    _reset_config(monkeypatch, tmp_path)
+
+    assert service.config.openai_compatible_stream is False
+
+    for value in ["true", "1", "yes"]:
+        monkeypatch.setenv("OPENAI_COMPATIBLE_STREAM", value)
+        assert service.config.openai_compatible_stream is True
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_STREAM", "false")
+    assert service.config.openai_compatible_stream is False
+
+
+def test_anysearch_config_defaults_and_saved_values(monkeypatch, tmp_path):
+    _reset_config(monkeypatch, tmp_path)
+
+    assert service.config.anysearch_api_url == "https://api.anysearch.com/mcp"
+    assert service.config.anysearch_api_key is None
+    assert service.config.anysearch_timeout == 30.0
+
+    service.config_set("ANYSEARCH_API_URL", "https://anysearch.example.com/mcp")
+    service.config_set("ANYSEARCH_API_KEY", "as-test-secret")
+    service.config_set("ANYSEARCH_TIMEOUT_SECONDS", "9")
+
+    assert service.config.anysearch_api_url == "https://anysearch.example.com/mcp"
+    assert service.config.anysearch_api_key == "as-test-secret"
+    assert service.config.anysearch_timeout == 9.0
 
 
 def test_environment_overrides_config_file(monkeypatch, tmp_path):
@@ -416,6 +449,56 @@ async def test_search_accepts_only_openai_compatible_as_main_provider(monkeypatc
     assert result["primary_api_mode"] == "chat-completions"
     assert result["routing_decision"]["main_search_chain"] == ["openai-compatible"]
     assert result["capability_status"]["main_search"]["configured"] == ["openai-compatible"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_stream", "override_stream", "expected_stream"),
+    [
+        ("true", None, True),
+        ("false", True, True),
+        ("true", False, False),
+    ],
+)
+async def test_search_passes_openai_compatible_stream_config_and_cli_override(monkeypatch, config_stream, override_stream, expected_stream):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://relay.example.com/v1")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "relay-test-secret")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_STREAM", config_stream)
+    captured = {}
+
+    async def fake_search(self, query, platform="", ctx=None):
+        captured["stream"] = self.stream
+        return "Relay answer."
+
+    monkeypatch.setattr(service.OpenAICompatibleSearchProvider, "search", fake_search)
+
+    kwargs = {} if override_stream is None else {"stream": override_stream}
+    result = await service.search("what is example", **kwargs)
+
+    assert result["ok"] is True
+    assert captured["stream"] is expected_stream
+    assert result["routing_decision"]["openai_compatible_stream"] is expected_stream
+
+
+def test_anysearch_vertical_status_is_experimental_and_not_minimum_required(monkeypatch):
+    monkeypatch.setenv("SMART_SEARCH_MINIMUM_PROFILE", "standard")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://relay.example.com/v1")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "relay-test-secret")
+    monkeypatch.setenv("EXA_API_KEY", "exa-test-secret")
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-test-secret")
+    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+
+    without_anysearch = service.validate_minimum_profile()
+    assert without_anysearch["ok"] is True
+    assert without_anysearch["capability_status"]["vertical_search"]["configured"] == []
+    assert without_anysearch["capability_status"]["vertical_search"]["experimental"] is True
+
+    monkeypatch.setenv("ANYSEARCH_API_KEY", "as-test-secret")
+    with_anysearch = service.validate_minimum_profile()
+    assert with_anysearch["ok"] is True
+    assert with_anysearch["missing"] == []
+    assert with_anysearch["required"] == ["main_search", "docs_search", "web_fetch"]
+    assert with_anysearch["capability_status"]["vertical_search"]["configured"] == ["anysearch"]
 
 
 @pytest.mark.asyncio
@@ -848,6 +931,74 @@ async def test_exa_search_preserves_provider_error_type(monkeypatch):
     assert result["ok"] is False
     assert result["error_type"] == "parameter_error"
     assert result["error"] == "HTTP 400: Bad Request"
+
+
+@pytest.mark.asyncio
+async def test_anysearch_service_wrappers_decode_provider_json(monkeypatch):
+    calls = []
+
+    class FakeAnySearchProvider:
+        def __init__(self, api_url, api_key, timeout):
+            calls.append(("init", api_url, api_key, timeout))
+
+        async def list_domains(self, domain=""):
+            calls.append(("domains", domain))
+            return json.dumps({"ok": True, "provider": "anysearch", "tool": "list_domains", "domain": domain})
+
+        async def vertical_search(self, query, domain="", sub_domain="", max_results=5):
+            calls.append(("search", query, domain, sub_domain, max_results))
+            return json.dumps({"ok": True, "provider": "anysearch", "tool": "search", "query": query})
+
+        async def extract(self, url, max_length=20000):
+            calls.append(("extract", url, max_length))
+            return json.dumps({"ok": True, "provider": "anysearch", "tool": "extract", "url": url})
+
+        async def batch_search(self, queries, max_results=3):
+            calls.append(("batch", queries, max_results))
+            return json.dumps({"ok": True, "provider": "anysearch", "tool": "batch_search", "results": []})
+
+    monkeypatch.setenv("ANYSEARCH_API_URL", "https://anysearch.example.com/mcp")
+    monkeypatch.setenv("ANYSEARCH_API_KEY", "as-test-secret")
+    monkeypatch.setenv("ANYSEARCH_TIMEOUT_SECONDS", "7")
+    monkeypatch.setattr(service, "AnySearchProvider", FakeAnySearchProvider)
+
+    domains = await service.anysearch_domains("security")
+    search = await service.anysearch_search("CVE-2024-3094", domain="security.cve", sub_domain="xz", max_results=2)
+    extract = await service.anysearch_extract("https://example.com", max_length=123)
+    batch = await service.anysearch_batch(["a", "b"], max_results=1)
+
+    assert domains["tool"] == "list_domains"
+    assert search["query"] == "CVE-2024-3094"
+    assert extract["url"] == "https://example.com"
+    assert batch["tool"] == "batch_search"
+    assert calls == [
+        ("init", "https://anysearch.example.com/mcp", "as-test-secret", 7.0),
+        ("domains", "security"),
+        ("init", "https://anysearch.example.com/mcp", "as-test-secret", 7.0),
+        ("search", "CVE-2024-3094", "security.cve", "xz", 2),
+        ("init", "https://anysearch.example.com/mcp", "as-test-secret", 7.0),
+        ("extract", "https://example.com", 123),
+        ("init", "https://anysearch.example.com/mcp", "as-test-secret", 7.0),
+        ("batch", ["a", "b"], 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anysearch_service_parse_error(monkeypatch):
+    class FakeAnySearchProvider:
+        def __init__(self, api_url, api_key, timeout):
+            pass
+
+        async def list_domains(self, domain=""):
+            return "not json"
+
+    monkeypatch.setattr(service, "AnySearchProvider", FakeAnySearchProvider)
+
+    result = await service.anysearch_domains()
+
+    assert result["ok"] is False
+    assert result["error_type"] == "parse_error"
+    assert result["provider"] == "anysearch"
 
 
 @pytest.mark.asyncio

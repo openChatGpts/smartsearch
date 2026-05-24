@@ -59,6 +59,49 @@ async def test_fetch_uses_non_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_stream_true_uses_streaming_executor(monkeypatch):
+    provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model", stream=True)
+    captured = {}
+
+    async def should_not_call_completion(headers, payload, ctx):
+        raise AssertionError("stream=true must use the streaming executor")
+
+    async def fake_stream(headers, payload, ctx):
+        captured["headers"] = headers
+        captured["payload"] = payload
+        return "streamed search"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", should_not_call_completion)
+    monkeypatch.setattr(provider, "_execute_stream_with_retry", fake_stream)
+
+    result = await provider.search("stream query")
+
+    assert result == "streamed search"
+    assert captured["payload"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_stream_true_uses_streaming_executor(monkeypatch):
+    provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model", stream=True)
+    captured = {}
+
+    async def should_not_call_completion(headers, payload, ctx):
+        raise AssertionError("stream=true must use the streaming executor")
+
+    async def fake_stream(headers, payload, ctx):
+        captured["payload"] = payload
+        return "streamed fetch"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", should_not_call_completion)
+    monkeypatch.setattr(provider, "_execute_stream_with_retry", fake_stream)
+
+    result = await provider.fetch("https://example.com")
+
+    assert result == "streamed fetch"
+    assert captured["payload"]["stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_describe_url_uses_non_stream(monkeypatch):
     """验证 describe_url() 使用非流式 completion"""
     provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model")
@@ -95,6 +138,29 @@ async def test_rank_sources_uses_non_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_describe_and_rank_ignore_instance_stream_flag(monkeypatch):
+    provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model", stream=True)
+    payloads = []
+
+    async def fake_execute(headers, payload, ctx):
+        payloads.append(payload)
+        if "Query:" in payload["messages"][1]["content"]:
+            return "1"
+        return "Title: Example\nExtracts: Some text"
+
+    async def should_not_stream(headers, payload, ctx):
+        raise AssertionError("short internal tasks must remain non-streaming")
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+    monkeypatch.setattr(provider, "_execute_stream_with_retry", should_not_stream)
+
+    await provider.describe_url("https://example.com")
+    await provider.rank_sources("query", "1. Source", 1)
+
+    assert [payload["stream"] for payload in payloads] == [False, False]
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_reads_json():
     """验证 JSON completion 响应正常解析"""
     provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model")
@@ -106,6 +172,28 @@ async def test_parse_completion_response_reads_json():
     result = await provider._parse_completion_response(response)
 
     assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_streaming_response_ignores_done_and_empty_stream_returns_empty():
+    provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class StreamResponse:
+        async def aiter_lines(self):
+            for line in [
+                'data: {"choices":[{"delta":{"content":"hello"}}]}',
+                'data: {"choices":[{"delta":{"content":" world"}}]}',
+                "data: [DONE]",
+            ]:
+                yield line
+
+    class EmptyStreamResponse:
+        async def aiter_lines(self):
+            for line in ["", "data: [DONE]"]:
+                yield line
+
+    assert await provider._parse_streaming_response(StreamResponse()) == "hello world"
+    assert await provider._parse_streaming_response(EmptyStreamResponse()) == ""
 
 
 @pytest.mark.asyncio

@@ -17,12 +17,13 @@ Use the local `smart-search` command as the default execution layer for web rese
 6. Use `smart-search exa-search` for official documentation, API references, papers, and low-noise source discovery.
 7. Use `smart-search context7-library` / `context7-docs` only for library, SDK, API, framework, or documentation intent.
 8. Use `smart-search zhipu-search` for Chinese, domestic, current, or domain-filtered web source discovery.
-9. Use `smart-search exa-similar` when the user gives a representative URL and wants related pages or neighboring sources.
-10. Use `smart-search fetch` when the user gives a URL or a claim depends on page content.
-11. Use `smart-search map` when a documentation site or domain structure matters.
-12. Use `smart-search model current` only to inspect explicit provider models. To change models, use `smart-search config set XAI_MODEL ...` or `smart-search config set OPENAI_COMPATIBLE_MODEL ...`.
-13. For current-news, policy, finance, health, or other high-risk facts, do not answer from broad `search.content` alone. Find reliable URLs with `exa-search`, `zhipu-search`, or source-focused `search`, then `fetch` key pages and summarize only what the fetched text supports.
-14. Preserve command lines and source URLs in your answer. Prefer citing fetched pages or `primary_sources`; treat `extra_sources` as follow-up candidates, not verified evidence for generated claims.
+9. Use `smart-search anysearch-*` only for experimental AnySearch acceptance and vertical-domain boundary tests; do not treat it as the default web-search or fetch fallback.
+10. Use `smart-search exa-similar` when the user gives a representative URL and wants related pages or neighboring sources.
+11. Use `smart-search fetch` when the user gives a URL or a claim depends on page content.
+12. Use `smart-search map` when a documentation site or domain structure matters.
+13. Use `smart-search model current` only to inspect explicit provider models. To change models, use `smart-search config set XAI_MODEL ...` or `smart-search config set OPENAI_COMPATIBLE_MODEL ...`.
+14. For current-news, policy, finance, health, or other high-risk facts, do not answer from broad `search.content` alone. Find reliable URLs with `exa-search`, `zhipu-search`, or source-focused `search`, then `fetch` key pages and summarize only what the fetched text supports.
+15. Preserve command lines and source URLs in your answer. Prefer citing fetched pages or `primary_sources`; treat `extra_sources` as follow-up candidates, not verified evidence for generated claims.
 
 ## Deep Research Mode
 
@@ -132,10 +133,12 @@ smart-search deep "https://example.com/source" --format json
 
 - `search` builds `main_search` from configured peer providers: `XAI_API_KEY` for xAI Responses and `OPENAI_COMPATIBLE_API_URL` + `OPENAI_COMPATIBLE_API_KEY` for OpenAI-compatible Chat Completions.
 - Official xAI uses the Responses API `/responses` route through `XAI_*`. Compatible relays/gateways use Chat Completions `/chat/completions` through `OPENAI_COMPATIBLE_*`.
+- `OPENAI_COMPATIBLE_STREAM=true` or `search --stream` sets `stream=true` only for OpenAI-compatible `search` and provider-side `fetch`; it is a relay compatibility switch and does not affect xAI Responses, URL description, or source ranking.
 - Legacy `SMART_SEARCH_API_URL`, `SMART_SEARCH_API_KEY`, `SMART_SEARCH_API_MODE`, `SMART_SEARCH_MODEL`, and `SMART_SEARCH_XAI_TOOLS` are unsupported config keys.
 - xAI Responses mode may use only `XAI_TOOLS=web_search,x_search` and a subset of those tools.
 - Chat Completions mode must not send xAI `web_search` / `x_search` tools or legacy `search_parameters`; xAI Chat Completions Live Search is deprecated.
 - The standard minimum profile requires one configured provider in each of `main_search`, `docs_search`, and fetch capability. Missing required capabilities should be treated as a hard configuration failure.
+- AnySearch is reported only as optional experimental `vertical_search`; it is not part of the `web_search` fallback and is not required by the `standard` minimum profile.
 - `search` exposes `--validation fast|balanced|strict`, `--fallback auto|off`, and `--providers auto|CSV`. Default validation is `balanced`; fallback only happens within the same capability.
 - xAI Responses is the default main answer route for Grok/xAI. In `fallback=auto`, a failed xAI Responses main route can fall back to OpenAI-compatible only when the OpenAI-compatible provider is separately configured.
 - Docs routing uses Exa first, then Context7 only for docs/API/SDK/library/framework intent.
@@ -148,6 +151,7 @@ smart-search deep "https://example.com/source" --format json
 - `map` currently uses Tavily only.
 - `exa-search` and `exa-similar` use Exa only.
 - `context7-library` and `context7-docs` use Context7 only.
+- `anysearch-domains`, `anysearch-search`, `anysearch-extract`, and `anysearch-batch` use AnySearch only. Treat results as acceptance evidence until the target vertical domain is reviewed.
 - `zhipu-search` uses Zhipu only.
 - Zhipu support currently corresponds to the official Zhipu Web Search API route, using `ZHIPU_API_URL` plus `ZHIPU_SEARCH_ENGINE`; it is not Zhipu Chat Completions `tools=[web_search]`, not Search Agent, and not the MCP Server.
 - `ZHIPU_SEARCH_ENGINE` defaults to `search_std`. Official Web Search API service values include `search_std`, `search_pro`, `search_pro_sogou`, and `search_pro_quark`; keep custom values possible because official services may change.
@@ -192,6 +196,8 @@ smart-search search "Iran Hormuz latest military talks" --extra-sources 3 --time
 - The setup wizard prints beginner filling examples for official-service and relay/pooled-endpoint minimum profiles. Keep that guidance on stderr so stdout remains parseable JSON/Markdown/content output.
 - Use `smart-search setup --lang en` for an English wizard and `smart-search setup --advanced` only when low-level config keys must be shown one by one.
 - Use `smart-search setup --non-interactive --zhipu-api-url "https://open.bigmodel.cn/api" --zhipu-search-engine "search_std"` to save Zhipu Web Search API endpoint and search service without prompts.
+- Use `smart-search setup --non-interactive --openai-compatible-stream true` only when an OpenAI-compatible relay benefits from SSE streaming for long requests. Default remains false.
+- Use `smart-search setup --non-interactive --anysearch-api-url "https://api.anysearch.com/mcp" --anysearch-key "key"` only for experimental AnySearch acceptance; do not add it to the normal minimum-profile setup.
 - Interactive setup asks for Zhipu API key, API URL, and search service when optional `web_search` reinforcement selects Zhipu.
 - Use `TAVILY_API_URL=https://<host>/api/tavily` for Tavily Hikari / pooled endpoints. Root host and `/mcp` inputs are normalized by setup; `/mcp` itself is not the REST base Smart Search should call.
 - `TAVILY_TIMEOUT_SECONDS` controls the Tavily `doctor` connectivity timeout and defaults to `30`. Raise it for slower pooled/community Tavily endpoints before judging the provider unhealthy.
@@ -201,6 +207,7 @@ smart-search search "Iran Hormuz latest military talks" --extra-sources 3 --time
 
 ```powershell
 smart-search search "query" --extra-sources 5 --timeout 90 --format json --output result.json
+smart-search search "query" --stream --format json
 smart-search search "query" --platform "Reuters" --model "model-id" --extra-sources 3 --timeout 90 --format json
 smart-search search "nba战报" --format content
 smart-search search "query" --validation strict --fallback auto --providers auto --format json
@@ -209,6 +216,10 @@ smart-search exa-similar "https://example.com/article" --num-results 5 --format 
 smart-search context7-library "react" "hooks" --format json
 smart-search context7-docs "/facebook/react" "useEffect cleanup" --format json
 smart-search zhipu-search "today China AI news" --count 5 --format json
+smart-search anysearch-domains security --format json
+smart-search anysearch-search "CVE-2024-3094" --domain security.cve --max-results 3 --format json
+smart-search anysearch-extract "https://example.com/source" --format json
+smart-search anysearch-batch "AAPL" "RAG papers" --max-results 2 --format json
 smart-search fetch "https://example.com" --format markdown --output page.md
 smart-search map "https://docs.example.com" --instructions "Find API reference pages" --max-depth 1 --max-breadth 20 --limit 50 --format json
 smart-search setup
@@ -216,6 +227,8 @@ smart-search setup --lang en
 smart-search setup --advanced
 smart-search setup --non-interactive --install-skills hermes
 smart-search setup --non-interactive --zhipu-api-url "https://open.bigmodel.cn/api" --zhipu-search-engine "search_std"
+smart-search setup --non-interactive --openai-compatible-stream true
+smart-search setup --non-interactive --anysearch-api-url "https://api.anysearch.com/mcp" --anysearch-key "key"
 smart-search setup --non-interactive --tavily-api-url "https://api.tavily.com" --tavily-key "key"
 smart-search --version
 smart-search config path --format json
@@ -227,6 +240,10 @@ smart-search config set XAI_TOOLS "web_search,x_search" --format json
 smart-search config set OPENAI_COMPATIBLE_API_URL "https://api.openai.com/v1" --format json
 smart-search config set OPENAI_COMPATIBLE_API_KEY "key" --format json
 smart-search config set OPENAI_COMPATIBLE_MODEL "model-id" --format json
+smart-search config set OPENAI_COMPATIBLE_STREAM "true" --format json
+smart-search config set ANYSEARCH_API_URL "https://api.anysearch.com/mcp" --format json
+smart-search config set ANYSEARCH_API_KEY "key" --format json
+smart-search config set ANYSEARCH_TIMEOUT_SECONDS "30" --format json
 smart-search config set EXA_API_KEY "key" --format json
 smart-search config set CONTEXT7_API_KEY "key" --format json
 smart-search config set ZHIPU_API_KEY "key" --format json

@@ -27,6 +27,7 @@ class Config:
         "OPENAI_COMPATIBLE_API_URL",
         "OPENAI_COMPATIBLE_API_KEY",
         "OPENAI_COMPATIBLE_MODEL",
+        "OPENAI_COMPATIBLE_STREAM",
         "SMART_SEARCH_VALIDATION_LEVEL",
         "SMART_SEARCH_FALLBACK_MODE",
         "SMART_SEARCH_MINIMUM_PROFILE",
@@ -46,6 +47,9 @@ class Config:
         "TAVILY_TIMEOUT_SECONDS",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
+        "ANYSEARCH_API_KEY",
+        "ANYSEARCH_API_URL",
+        "ANYSEARCH_TIMEOUT_SECONDS",
         "SMART_SEARCH_DEBUG",
         "SMART_SEARCH_LOG_LEVEL",
         "SMART_SEARCH_LOG_DIR",
@@ -214,6 +218,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
+            "OPENAI_COMPATIBLE_STREAM",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_FALLBACK_MODE",
             "SMART_SEARCH_MINIMUM_PROFILE",
@@ -238,6 +243,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
+            "OPENAI_COMPATIBLE_STREAM",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_FALLBACK_MODE",
             "SMART_SEARCH_MINIMUM_PROFILE",
@@ -302,6 +308,10 @@ class Config:
     def openai_compatible_model(self) -> str:
         model = self._get_config_value("OPENAI_COMPATIBLE_MODEL") or self._base_model_value()
         return self.apply_model_suffix_for_url(model, self.openai_compatible_api_url or "")
+
+    @property
+    def openai_compatible_stream(self) -> bool:
+        return (self._get_config_value("OPENAI_COMPATIBLE_STREAM", "false") or "false").lower() in ("true", "1", "yes")
 
     def parse_xai_tools(self, raw: str | None = None) -> list[str]:
         raw = raw or self.xai_tools_raw
@@ -385,6 +395,18 @@ class Config:
     @property
     def firecrawl_api_key(self) -> str | None:
         return self._get_config_value("FIRECRAWL_API_KEY")
+
+    @property
+    def anysearch_api_url(self) -> str:
+        return self._get_config_value("ANYSEARCH_API_URL", "https://api.anysearch.com/mcp") or "https://api.anysearch.com/mcp"
+
+    @property
+    def anysearch_api_key(self) -> str | None:
+        return self._get_config_value("ANYSEARCH_API_KEY")
+
+    @property
+    def anysearch_timeout(self) -> float:
+        return float(self._get_config_value("ANYSEARCH_TIMEOUT_SECONDS", "30") or "30")
 
     @property
     def log_level(self) -> str:
@@ -514,6 +536,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL": self.openai_compatible_api_url or "未配置",
             "OPENAI_COMPATIBLE_API_KEY": self._mask_api_key(self.openai_compatible_api_key) if self.openai_compatible_api_key else "未配置",
             "OPENAI_COMPATIBLE_MODEL": self.openai_compatible_model,
+            "OPENAI_COMPATIBLE_STREAM": self.openai_compatible_stream,
             "SMART_SEARCH_VALIDATION_LEVEL": validation_level,
             "SMART_SEARCH_FALLBACK_MODE": fallback_mode,
             "SMART_SEARCH_MINIMUM_PROFILE": minimum_profile,
@@ -529,6 +552,9 @@ class Config:
             "TAVILY_TIMEOUT_SECONDS": self.tavily_timeout,
             "FIRECRAWL_API_URL": self.firecrawl_api_url,
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
+            "ANYSEARCH_API_URL": self.anysearch_api_url,
+            "ANYSEARCH_API_KEY": self._mask_api_key(self.anysearch_api_key) if self.anysearch_api_key else "未配置",
+            "ANYSEARCH_TIMEOUT_SECONDS": self.anysearch_timeout,
             "SMART_SEARCH_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "SMART_SEARCH_LOG_TO_FILE": self.log_to_file_enabled,
             "SSL_VERIFY": self.ssl_verify_enabled,

@@ -105,6 +105,7 @@ Trellis, hooks, agents, or commands. `--skills-root PATH` is only an advanced ov
 | `docs_search` | `exa-search`, `context7-library`, `context7-docs` | Exa, Context7 | Official docs, SDKs, APIs, framework/library evidence |
 | `web_search` | `zhipu-search`, intent-routed reinforcement inside `search` | Zhipu, Tavily, Firecrawl | Chinese, domestic, current, domain-filtered, or supplementary web discovery |
 | `web_fetch` | `fetch` | Tavily, Firecrawl | Exact URL content extraction for evidence |
+| `vertical_search` | `anysearch-domains`, `anysearch-search`, `anysearch-extract`, `anysearch-batch` | AnySearch (experimental) | Acceptance testing for structured vertical domains such as CVE, finance, legal, academic, and code/docs |
 | `site_map` | `map` | Tavily | Site/documentation structure discovery |
 | `deep_planner` | `deep` / `dr` | Local planner only | Offline plan generation; no provider call by default |
 
@@ -116,6 +117,8 @@ Fallback is same-capability only:
 | `docs_search` | Exa -> Context7 |
 | `web_search` | Zhipu -> Tavily -> Firecrawl |
 | `web_fetch` | Tavily -> Firecrawl |
+
+AnySearch is intentionally not part of the `web_search` fallback chain and is not required by the `standard` minimum profile. Use its explicit commands for acceptance and boundary testing before promoting any vertical domain into a future route.
 
 The CLI exposes observability fields such as `routing_decision`, `provider_attempts`, `providers_used`, `fallback_used`, `primary_sources`, `extra_sources`, and `source_warning`.
 
@@ -173,22 +176,25 @@ Use `smart-search setup` for normal configuration. Environment variables remain 
 | Provider / route | Used for | Main config keys | Official docs | Key / dashboard |
 | --- | --- | --- | --- | --- |
 | xAI Responses API | Primary live search with `web_search,x_search` tools | `XAI_API_KEY`, `XAI_API_URL`, `XAI_MODEL`, `XAI_TOOLS` | [docs.x.ai](https://docs.x.ai/docs) | [xAI API keys](https://console.x.ai/team/default/api-keys) |
-| OpenAI-compatible Chat Completions | Primary search through OpenAI or a compatible relay; no xAI search tools are sent here | `OPENAI_COMPATIBLE_API_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` | [OpenAI platform docs](https://platform.openai.com/docs) | [OpenAI API keys](https://platform.openai.com/api-keys) or your relay provider |
+| OpenAI-compatible Chat Completions | Primary search through OpenAI or a compatible relay; no xAI search tools are sent here | `OPENAI_COMPATIBLE_API_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL`, `OPENAI_COMPATIBLE_STREAM` | [OpenAI platform docs](https://platform.openai.com/docs) | [OpenAI API keys](https://platform.openai.com/api-keys) or your relay provider |
 | Exa | Low-noise official docs, API, paper, product, trusted-page discovery | `EXA_API_KEY` | [Exa docs](https://docs.exa.ai/) | [Exa API keys](https://dashboard.exa.ai/api-keys) |
 | Context7 | SDK, library, framework, and API documentation fallback | `CONTEXT7_API_KEY`, `CONTEXT7_BASE_URL` | [Context7 docs](https://context7.com/docs) | [Context7](https://context7.com/) |
 | Zhipu Web Search API | Chinese, domestic, current, or domain-filtered web discovery | `ZHIPU_API_KEY`, `ZHIPU_API_URL`, `ZHIPU_SEARCH_ENGINE` | [Zhipu web search docs](https://docs.bigmodel.cn/cn/guide/tools/web-search) | [Zhipu API keys](https://open.bigmodel.cn/usercenter/apikeys) |
 | Tavily | Extra web sources, URL fetch, and site map | `TAVILY_API_URL`, `TAVILY_API_KEY` | [Tavily docs](https://docs.tavily.com/) | [Tavily app](https://app.tavily.com/home) |
 | Firecrawl | Fetch fallback and supplementary web sources | `FIRECRAWL_API_URL`, `FIRECRAWL_API_KEY` | [Firecrawl docs](https://docs.firecrawl.dev/) | [Firecrawl API keys](https://www.firecrawl.dev/app/api-keys) |
+| AnySearch | Experimental vertical search acceptance surface; not a default fallback | `ANYSEARCH_API_URL`, `ANYSEARCH_API_KEY`, `ANYSEARCH_TIMEOUT_SECONDS` | Provider documentation | AnySearch dashboard / provider console |
 
 Important boundaries:
 
 - xAI official live search uses the Responses API `/responses` route through `XAI_*`. Compatible relays and gateways use Chat Completions `/chat/completions` through `OPENAI_COMPATIBLE_*`.
+- `OPENAI_COMPATIBLE_STREAM=true` or `smart-search search --stream` sets `stream=true` only for OpenAI-compatible `search` and provider-side `fetch` calls. It is a relay compatibility switch for long requests and does not change xAI Responses behavior, URL description, or source ranking.
 - Legacy `SMART_SEARCH_API_URL`, `SMART_SEARCH_API_KEY`, `SMART_SEARCH_API_MODE`, `SMART_SEARCH_MODEL`, and `SMART_SEARCH_XAI_TOOLS` are not supported config keys. Use `XAI_*` or `OPENAI_COMPATIBLE_*` explicitly.
 - Do not force xAI `web_search` / `x_search` tools or legacy `search_parameters` into the OpenAI-compatible Chat Completions route.
 - Zhipu support is the Web Search API route, not Zhipu Chat Completions `tools=[web_search]`, not Search Agent, and not the MCP Server.
 - `ZHIPU_SEARCH_ENGINE` defaults to `search_std`. Supported official values include `search_std`, `search_pro`, `search_pro_sogou`, and `search_pro_quark`; custom values remain allowed for future services.
 - `TAVILY_API_URL` affects Tavily only. It does not proxy Zhipu. For Tavily Hikari / pooled endpoints, use `https://<host>/api/tavily`; setup normalizes root-host or `/mcp` inputs to that REST base.
 - `FIRECRAWL_API_URL` defaults to `https://api.firecrawl.dev/v2`.
+- AnySearch uses JSON-RPC 2.0 `tools/call` at `https://api.anysearch.com/mcp` by default. It allows anonymous calls when no key is configured, but authenticated calls send `Authorization: Bearer ...`. HTTP 200 responses with `result.isError=true` are treated as provider errors, not as successful evidence.
 
 Non-interactive setup example:
 
@@ -199,6 +205,7 @@ smart-search setup --non-interactive `
   --openai-compatible-api-url "https://api.openai.com/v1" `
   --openai-compatible-api-key "your-openai-or-relay-key" `
   --openai-compatible-model "gpt-4.1" `
+  --openai-compatible-stream "false" `
   --validation-level "balanced" `
   --fallback-mode "auto" `
   --minimum-profile "standard" `
@@ -221,6 +228,16 @@ Minimum profile defaults to `standard`, requiring at least:
 
 Missing required capabilities fail closed with a configuration error. Use `SMART_SEARCH_MINIMUM_PROFILE=off` only for local experiments.
 
+Experimental AnySearch configuration is optional and does not satisfy or change the `standard` minimum profile:
+
+```powershell
+smart-search setup --non-interactive --anysearch-api-url "https://api.anysearch.com/mcp" --anysearch-key "your-anysearch-key"
+smart-search anysearch-domains security --format json
+smart-search anysearch-search "CVE-2024-3094" --domain security.cve --max-results 3 --format json
+smart-search anysearch-extract "https://example.com/source" --format json
+smart-search anysearch-batch "AAPL" "RAG papers" --max-results 2 --format json
+```
+
 Local config path:
 
 - Windows default: `%LOCALAPPDATA%\smart-search\config.json`.
@@ -231,6 +248,7 @@ Local config path:
 Provider timeouts:
 
 - `TAVILY_TIMEOUT_SECONDS` controls the Tavily `doctor` connectivity check timeout and defaults to `30`.
+- `ANYSEARCH_TIMEOUT_SECONDS` controls experimental AnySearch JSON-RPC calls and defaults to `30`.
 - Raise it for slower Tavily Hikari / pooled / community endpoints before treating the provider as unhealthy.
 
 ## Commands
@@ -244,6 +262,10 @@ Provider timeouts:
 | `exa-search` | `exa`, `x` | Exa source discovery |
 | `exa-similar` | `xs` | Similar pages from one URL |
 | `zhipu-search` | `z`, `zp` | Zhipu Web Search API |
+| `anysearch-domains` | `as-domains` | Experimental AnySearch domain discovery |
+| `anysearch-search` | `as-search`, `as` | Experimental AnySearch vertical/general search |
+| `anysearch-extract` | `as-extract` | Experimental AnySearch URL extraction |
+| `anysearch-batch` | `as-batch` | Experimental AnySearch batch search, up to 5 queries |
 | `context7-library` | `c7`, `ctx7` | Resolve Context7 library candidates |
 | `context7-docs` | `c7d`, `c7docs`, `ctx7-docs` | Fetch Context7 docs |
 | `doctor` | `d` | Masked config and connectivity check |
@@ -257,11 +279,15 @@ Useful examples:
 
 ```powershell
 smart-search search "query" --validation balanced --extra-sources 3 --timeout 90 --format json --output result.json
+smart-search search "query" --stream --format json
+smart-search search "query" --no-stream --format json
 smart-search search "nba report" --format content
 smart-search exa-search "OpenAI Responses API documentation" --include-domains platform.openai.com developers.openai.com --num-results 5 --include-text --format json
 smart-search context7-library "react" "hooks" --format json
 smart-search context7-docs "/facebook/react" "useEffect cleanup" --format json
 smart-search zhipu-search "today China AI news" --search-engine search_pro_sogou --count 5 --format json
+smart-search anysearch-search "CVE-2024-3094" --domain security.cve --max-results 3 --format json
+smart-search anysearch-extract "https://example.com/source" --format json
 smart-search exa-similar "https://example.com/source" --num-results 5 --format json
 smart-search fetch "https://example.com/source" --format markdown --output page.md
 smart-search map "https://docs.example.com" --instructions "Find API reference pages" --max-depth 1 --limit 50 --format json

@@ -81,9 +81,10 @@ class _WaitWithRetryAfter(wait_base):
 
 
 class OpenAICompatibleSearchProvider(BaseSearchProvider):
-    def __init__(self, api_url: str, api_key: str, model: str = "grok-4-fast"):
+    def __init__(self, api_url: str, api_key: str, model: str = "grok-4-fast", stream: bool = False):
         super().__init__(api_url, api_key)
         self.model = model
+        self.stream = stream
 
     def get_provider_name(self) -> str:
         return "OpenAI-compatible"
@@ -122,11 +123,13 @@ class OpenAICompatibleSearchProvider(BaseSearchProvider):
                 },
                 {"role": "user", "content": time_context + query + platform_prompt},
             ],
-            "stream": False,
+            "stream": self.stream,
         }
 
         await log_info(ctx, f"platform_prompt: { query + platform_prompt}", config.debug_enabled)
 
+        if self.stream:
+            return await self._execute_stream_with_retry(headers, payload, ctx)
         return await self._execute_completion_with_retry(headers, payload, ctx)
 
     async def fetch(self, url: str, ctx=None) -> str:
@@ -140,8 +143,10 @@ class OpenAICompatibleSearchProvider(BaseSearchProvider):
                 },
                 {"role": "user", "content": url + "\n获取该网页内容并返回其结构化Markdown格式" },
             ],
-            "stream": False,
+            "stream": self.stream,
         }
+        if self.stream:
+            return await self._execute_stream_with_retry(headers, payload, ctx)
         return await self._execute_completion_with_retry(headers, payload, ctx)
 
     async def _parse_streaming_response(self, response, ctx=None) -> str:

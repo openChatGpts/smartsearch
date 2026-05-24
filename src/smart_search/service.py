@@ -10,6 +10,7 @@ import httpx
 
 from .config import config
 from .logger import log_info
+from .providers.anysearch import AnySearchProvider
 from .providers.context7 import Context7Provider
 from .providers.exa import ExaSearchProvider
 from .providers.openai_compatible import OpenAICompatibleSearchProvider
@@ -632,8 +633,13 @@ def get_capability_status() -> dict[str, Any]:
             ],
             "fallback_chain": ["tavily", "firecrawl"],
         },
+        "vertical_search": {
+            "configured": ["anysearch"] if config.anysearch_api_key else [],
+            "fallback_chain": ["anysearch"],
+            "experimental": True,
+        },
     }
-    for capability in ("web_search", "docs_search", "web_fetch"):
+    for capability in ("web_search", "docs_search", "web_fetch", "vertical_search"):
         status[capability]["ok"] = bool(status[capability]["configured"])
     return status
 
@@ -706,6 +712,7 @@ def _main_search_provider_configs(model_override: str = "", providers: str = "au
             "api_url": config.openai_compatible_api_url,
             "api_key": config.openai_compatible_api_key,
             "model": model_override or config.openai_compatible_model,
+            "stream": config.openai_compatible_stream,
             "tools": [],
             "source": "OPENAI_COMPATIBLE_*",
         }
@@ -736,6 +743,7 @@ def _main_search_providers(provider_configs: list[dict[str, Any]], fallback: str
                     provider_config["api_url"],
                     provider_config["api_key"],
                     provider_config["model"],
+                    provider_config.get("stream", False),
                 )
             )
     return providers
@@ -1104,6 +1112,7 @@ async def search(
     validation: str = "",
     fallback: str = "",
     providers: str = "auto",
+    stream: bool | None = None,
 ) -> dict[str, Any]:
     start = time.time()
     session_id = new_session_id()
@@ -1152,6 +1161,10 @@ async def search(
         )
 
     primary_api_mode = main_provider_configs[0]["mode"]
+    if stream is not None:
+        for provider_config in main_provider_configs:
+            if provider_config["provider"] == "openai-compatible":
+                provider_config["stream"] = stream
 
     has_tavily = bool(config.tavily_api_key)
     has_firecrawl = bool(config.firecrawl_api_key)
@@ -1188,6 +1201,7 @@ async def search(
         "fallback_mode": fallback_mode,
         "providers": providers,
         "main_search_chain": [item["provider"] for item in selected_main_provider_configs],
+        "openai_compatible_stream": next((bool(item.get("stream")) for item in selected_main_provider_configs if item["provider"] == "openai-compatible"), False),
     }
 
     provider_attempts: list[dict] = []
@@ -1496,6 +1510,40 @@ async def exa_search(
     if not data.get("ok", False):
         data.setdefault("error_type", "network_error")
     return data
+
+
+def _anysearch_provider() -> AnySearchProvider:
+    return AnySearchProvider(config.anysearch_api_url, config.anysearch_api_key, config.anysearch_timeout)
+
+
+async def _decode_provider_json(raw: str) -> dict[str, Any]:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"ok": False, "provider": "anysearch", "error_type": "parse_error", "error": raw}
+
+
+async def anysearch_domains(domain: str = "") -> dict[str, Any]:
+    return await _decode_provider_json(await _anysearch_provider().list_domains(domain))
+
+
+async def anysearch_search(query: str, domain: str = "", sub_domain: str = "", max_results: int = 5) -> dict[str, Any]:
+    return await _decode_provider_json(
+        await _anysearch_provider().vertical_search(
+            query=query,
+            domain=domain,
+            sub_domain=sub_domain,
+            max_results=max_results,
+        )
+    )
+
+
+async def anysearch_extract(url: str, max_length: int = 20000) -> dict[str, Any]:
+    return await _decode_provider_json(await _anysearch_provider().extract(url, max_length=max_length))
+
+
+async def anysearch_batch(queries: list[str], max_results: int = 3) -> dict[str, Any]:
+    return await _decode_provider_json(await _anysearch_provider().batch_search(queries, max_results=max_results))
 
 
 async def exa_find_similar(url: str, num_results: int = 5) -> dict[str, Any]:
@@ -1931,6 +1979,7 @@ async def _smoke_mock(start: float) -> dict[str, Any]:
         "web_search": {"configured": ["zhipu"], "fallback_chain": ["zhipu", "tavily", "firecrawl"], "ok": True},
         "docs_search": {"configured": ["exa"], "fallback_chain": ["exa", "context7"], "ok": True},
         "web_fetch": {"configured": ["tavily"], "fallback_chain": ["tavily", "firecrawl"], "ok": True},
+        "vertical_search": {"configured": [], "fallback_chain": ["anysearch"], "ok": False, "experimental": True},
     }
     minimum = _minimum_profile_result("standard", minimum_status)
     cases.append(
