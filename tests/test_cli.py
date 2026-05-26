@@ -1400,6 +1400,24 @@ def test_skill_installer_parse_aliases_and_all(tmp_path):
     assert (tmp_path / "project" / ".codex" / "skills" / "smart-search-cli" / "SKILL.md").is_file()
 
 
+def test_skill_installer_pi_target_uses_agent_skill_root(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_text("---\nname: smart-search-cli\n---\n", encoding="utf-8")
+
+    result = skill_installer.install_skill_targets(
+        ["pi"],
+        project_root=tmp_path / "project",
+        source_root=source,
+    )
+
+    assert result["ok"] is True
+    assert result["installed_count"] == 1
+    assert result["installed"][0]["path"].endswith(".pi/agent/skills/smart-search-cli")
+    assert (tmp_path / "project" / ".pi" / "agent" / "skills" / "smart-search-cli" / "SKILL.md").is_file()
+    assert not (tmp_path / "project" / ".pi" / "skills" / "smart-search-cli").exists()
+
+
 def test_skill_installer_status_detects_stale_and_extra_files(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
