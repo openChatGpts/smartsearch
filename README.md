@@ -410,23 +410,24 @@ npm pack --dry-run
 
 ## Latest stable release notes
 
-### v0.1.13
+### v0.1.14
 
-This stable release consolidates the 0.1.12 beta line into npm `latest`.
+This stable patch release moves the tested `0.1.13-beta.4` CLI and bundled skill contract into npm `latest`.
 
-- OpenAI-compatible streaming: `OPENAI_COMPATIBLE_STREAM=true` or `smart-search search --stream` sends `stream=true` to Chat Completions relays and records the effective decision in `routing_decision.openai_compatible_stream`. `--no-stream` remains the per-call opt-out.
-- Experimental AnySearch acceptance surface: `anysearch-domains`, `anysearch-search`, `anysearch-extract`, and `anysearch-batch` expose AnySearch as optional `vertical_search` without changing the default fallback chain or `standard` minimum profile.
-- AnySearch setup/config: `ANYSEARCH_API_URL`, `ANYSEARCH_API_KEY`, and `ANYSEARCH_TIMEOUT_SECONDS` are supported by `setup`, `config`, `doctor`, and masked config output.
-- npm packaged install repair: the wrapper can repair a missing `.smart-search-python` runtime and packaged `smart-search regression` still falls back to mock smoke when repository tests are not bundled.
-- Documentation and bundled skill contracts now cover streaming, AnySearch boundaries, setup flags, release lanes, and Windows npm/mise verification.
+- Fixes GitHub issue #7: npm `latest` now includes the `smart-search skills` command expected by the newer installed `smart-search-cli` skill.
+- `smart-search skills status` reports whether installed user-level skills are missing, stale, up to date, or contain extra files without writing anything.
+- `smart-search skills update` refreshes only the managed bundled `smart-search-cli` files for selected AI-tool targets after a CLI upgrade.
+- `smart-search diagnose openai-compatible --format markdown` produces a focused, copy-pasteable troubleshooting report for OpenAI-compatible search hangs/timeouts.
+- Docs/API routing now prefers Context7 for library/framework documentation and keeps Exa for official domains, papers, product pages, and trusted-site discovery.
+- README, bundled skill assets, release notes, and tests now document and verify the exact stable package behavior.
 
 ## Release lanes
 
 Stable releases use Git tags and npm `latest`:
 
 ```powershell
-git tag v0.1.13
-git push origin v0.1.13
+git tag v0.1.14
+git push origin v0.1.14
 ```
 
 Test releases use npm prereleases and do not move `latest`. A push to `main` publishes the next `<package.json version>-beta.N` version under npm dist-tag `next`; `N` resets for each stable base version. To avoid publishing an unwanted beta for a stable bump, the `chore(release): bump version to X.Y.Z` branch commit is skipped by the workflow and the matching `vX.Y.Z` tag publishes npm `latest`. For example, after `0.1.10-beta.1` and `0.1.10-beta.2`, the next `main` publish is `0.1.10-beta.3`.
