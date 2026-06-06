@@ -11,14 +11,24 @@ import httpx
 
 from .config import config
 from .intent_router import (
+    CAPABILITY_UTTERANCES,
     CURRENT_INTENT_KEYWORDS as ROUTER_CURRENT_INTENT_KEYWORDS,
+    DEFAULT_ROUTE_CALIBRATION_MODELS,
+    DEFAULT_SEMANTIC_CONFIDENCE_MARGIN,
+    DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD,
     DOCS_INTENT_KEYWORDS as ROUTER_DOCS_INTENT_KEYWORDS,
     FETCH_INTENT_KEYWORDS as ROUTER_FETCH_INTENT_KEYWORDS,
+    ROUTABLE_CAPABILITIES,
+    ROUTE_CALIBRATION_QUERIES,
     VERTICAL_INTENT_KEYWORDS as ROUTER_VERTICAL_INTENT_KEYWORDS,
     IntentRouteResult,
     IntentRouter,
     build_rules_route,
     extract_urls as router_extract_urls,
+    _classifier_can_add_capability,
+    _cosine_similarity,
+    _ordered_capabilities,
+    _semantic_summary,
 )
 from .logger import log_info
 from .providers.anysearch import AnySearchProvider
@@ -2127,6 +2137,23 @@ async def route(
             "elapsed_ms": _elapsed_ms(start),
         }
     data = route_result.to_dict()
+    router_status = intent_router_status()
+    preset_fields = {
+        key: router_status.get(key)
+        for key in (
+            "embedding_preset_id",
+            "embedding_preset_model",
+            "embedding_preset_api_url",
+            "embedding_preset_threshold",
+            "embedding_preset_margin",
+            "embedding_preset_threshold_matches",
+            "embedding_preset_margin_matches",
+            "embedding_preset_recommended",
+            "embedding_preset_recommendation",
+            "embedding_preset_commands",
+        )
+        if key in router_status
+    }
     data.update(
         {
             "ok": True,
@@ -2134,9 +2161,464 @@ async def route(
             "validation_level": validation_level,
             "executed_search": False,
             "provider_selection": "not_executed",
+            "embedding_model": router_status.get("embedding_model", ""),
+            "embedding_threshold": router_status.get("embedding_threshold", ""),
+            "embedding_margin": router_status.get("embedding_margin", ""),
+            "embedding_threshold_source": router_status.get("embedding_threshold_source", ""),
+            "embedding_margin_source": router_status.get("embedding_margin_source", ""),
             "elapsed_ms": _elapsed_ms(start),
+            **preset_fields,
         }
     )
+    return data
+
+
+class _CalibrationConfigProxy:
+    def __init__(self, base_config: Any, model: str, threshold: float, margin: float):
+        self._base_config = base_config
+        self._model = model
+        self._threshold = threshold
+        self._margin = margin
+
+    @property
+    def intent_router_mode(self) -> str:
+        return "hybrid"
+
+    @property
+    def intent_embedding_model(self) -> str:
+        return self._model
+
+    @property
+    def intent_embedding_threshold(self) -> float:
+        return self._threshold
+
+    @property
+    def intent_embedding_margin(self) -> float:
+        return self._margin
+
+    def get_config_source(self, key: str) -> str:
+        if key in {"INTENT_EMBEDDING_MODEL", "INTENT_EMBEDDING_THRESHOLD", "INTENT_EMBEDDING_MARGIN"}:
+            return "calibration"
+        getter = getattr(self._base_config, "get_config_source", None)
+        if callable(getter):
+            return str(getter(key))
+        return "default"
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base_config, name)
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        item = value.strip()
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _parse_calibration_models(models: str = "") -> list[str]:
+    if models.strip():
+        return _dedupe_preserve_order([item.strip() for item in models.split(",")])
+    defaults = list(DEFAULT_ROUTE_CALIBRATION_MODELS)
+    current = config.intent_embedding_model
+    if current:
+        defaults.append(current)
+    return _dedupe_preserve_order(defaults)
+
+
+def _configured_embedding_threshold() -> float:
+    try:
+        return config.intent_embedding_threshold
+    except ValueError:
+        return DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD
+
+
+def _configured_embedding_margin() -> float:
+    try:
+        return config.intent_embedding_margin
+    except ValueError:
+        return DEFAULT_SEMANTIC_CONFIDENCE_MARGIN
+
+
+def _route_calibration_dataset() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for label, queries in ROUTE_CALIBRATION_QUERIES.items():
+        expected = [] if label == "none" else [label]
+        for index, query_text in enumerate(queries, 1):
+            examples.append(
+                {
+                    "id": f"{label}-{index:02d}",
+                    "query": query_text,
+                    "expected_capabilities": list(expected),
+                    "expected_label": label,
+                }
+            )
+    return examples
+
+
+async def _embed_in_batches(router: IntentRouter, inputs: list[str], batch_size: int = 64) -> list[list[float]]:
+    embeddings: list[list[float]] = []
+    for start_index in range(0, len(inputs), batch_size):
+        embeddings.extend(await router._embed(inputs[start_index : start_index + batch_size]))
+    return embeddings
+
+
+def _label_present(capabilities: set[str], label: str) -> bool:
+    if label == "none":
+        return not capabilities
+    return label in capabilities
+
+
+def _macro_f1(expected: list[set[str]], predicted: list[set[str]], labels: list[str]) -> dict[str, Any]:
+    per_label: dict[str, float] = {}
+    for label in labels:
+        true_positive = 0
+        false_positive = 0
+        false_negative = 0
+        for expected_caps, predicted_caps in zip(expected, predicted):
+            expected_has = _label_present(expected_caps, label)
+            predicted_has = _label_present(predicted_caps, label)
+            if expected_has and predicted_has:
+                true_positive += 1
+            elif not expected_has and predicted_has:
+                false_positive += 1
+            elif expected_has and not predicted_has:
+                false_negative += 1
+        precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
+        recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
+        per_label[label] = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    macro = sum(per_label.values()) / len(labels) if labels else 0.0
+    return {
+        "macro_f1": round(macro, 4),
+        "per_label_f1": {label: round(score, 4) for label, score in per_label.items()},
+    }
+
+
+def _confusion_label(capabilities: set[str]) -> str:
+    ordered = _ordered_capabilities(capabilities)
+    if not ordered:
+        return "none"
+    if len(ordered) == 1:
+        return ordered[0]
+    return "+".join(ordered)
+
+
+def _confusion_matrix(expected: list[set[str]], predicted: list[set[str]]) -> dict[str, dict[str, int]]:
+    matrix: dict[str, dict[str, int]] = {}
+    for expected_caps, predicted_caps in zip(expected, predicted):
+        actual = _confusion_label(expected_caps)
+        guessed = _confusion_label(predicted_caps)
+        matrix.setdefault(actual, {})
+        matrix[actual][guessed] = matrix[actual].get(guessed, 0) + 1
+    return matrix
+
+
+def _semantic_predictions(
+    records: list[dict[str, Any]],
+    threshold: float,
+    margin: float,
+) -> tuple[list[set[str]], list[dict[str, Any]]]:
+    predictions: list[set[str]] = []
+    summaries: list[dict[str, Any]] = []
+    for record in records:
+        summary = _semantic_summary(record["scores"], threshold, margin)
+        summaries.append(summary)
+        if summary["passed_threshold"] and summary["passed_margin"]:
+            predictions.append({str(summary["top_capability"])})
+        else:
+            predictions.append(set())
+    return predictions, summaries
+
+
+def _candidate_thresholds(records: list[dict[str, Any]]) -> list[float]:
+    values = {round(index / 100, 2) for index in range(50, 96)}
+    values.add(round(_configured_embedding_threshold(), 2))
+    for record in records:
+        summary = _semantic_summary(record["scores"], 0.0, 0.0)
+        top_score = float(summary["top_score"])
+        for delta in (-0.02, -0.01, 0.0, 0.01, 0.02):
+            value = max(0.0, min(1.0, top_score + delta))
+            values.add(round(value, 3))
+    return sorted(values)
+
+
+def _candidate_margins(records: list[dict[str, Any]]) -> list[float]:
+    values = {round(index / 100, 2) for index in range(0, 21)}
+    values.add(round(_configured_embedding_margin(), 2))
+    for record in records:
+        summary = _semantic_summary(record["scores"], 0.0, 0.0)
+        score_margin = float(summary["margin"])
+        for delta in (-0.02, -0.01, 0.0, 0.01, 0.02):
+            value = max(0.0, min(1.0, score_margin + delta))
+            values.add(round(value, 3))
+    return sorted(values)
+
+
+def _select_semantic_parameters(
+    records: list[dict[str, Any]],
+    expected: list[set[str]],
+    labels: list[str],
+) -> dict[str, Any]:
+    best: dict[str, Any] | None = None
+    thresholds = _candidate_thresholds(records)
+    margins = _candidate_margins(records)
+    for threshold in thresholds:
+        for margin in margins:
+            predictions, _ = _semantic_predictions(records, threshold, margin)
+            metrics = _macro_f1(expected, predictions, labels)
+            failures = sum(1 for left, right in zip(expected, predictions) if left != right)
+            candidate = {
+                "threshold": threshold,
+                "margin": margin,
+                "macro_f1": metrics["macro_f1"],
+                "per_label_f1": metrics["per_label_f1"],
+                "failures": failures,
+            }
+            if best is None:
+                best = candidate
+                continue
+            current_key = (candidate["macro_f1"], -candidate["failures"], candidate["threshold"], candidate["margin"])
+            best_key = (best["macro_f1"], -best["failures"], best["threshold"], best["margin"])
+            if current_key > best_key:
+                best = candidate
+    return best or {
+        "threshold": _configured_embedding_threshold(),
+        "margin": _configured_embedding_margin(),
+        "macro_f1": 0.0,
+        "per_label_f1": {},
+        "failures": len(records),
+    }
+
+
+def _representative_failures(
+    records: list[dict[str, Any]],
+    expected: list[set[str]],
+    predicted: list[set[str]],
+    summaries: list[dict[str, Any]],
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for record, expected_caps, predicted_caps, summary in zip(records, expected, predicted, summaries):
+        if expected_caps == predicted_caps:
+            continue
+        rounded_scores = {
+            capability: round(float(score), 4)
+            for capability, score in sorted(record["scores"].items(), key=lambda item: item[0])
+        }
+        failures.append(
+            {
+                "id": record["case"]["id"],
+                "query": record["case"]["query"],
+                "expected": _confusion_label(expected_caps),
+                "predicted": _confusion_label(predicted_caps),
+                "top_capability": summary["top_capability"],
+                "top_score": round(float(summary["top_score"]), 4),
+                "second_score": round(float(summary["second_score"]), 4),
+                "margin": round(float(summary["margin"]), 4),
+                "scores": rounded_scores,
+            }
+        )
+        if len(failures) >= limit:
+            break
+    return failures
+
+
+async def _full_route_predictions(
+    records: list[dict[str, Any]],
+    threshold: float,
+    margin: float,
+    model: str,
+) -> tuple[list[set[str]], list[dict[str, Any]], list[dict[str, Any]]]:
+    proxy = _CalibrationConfigProxy(config, model, threshold, margin)
+    router = IntentRouter(proxy)
+    predictions: list[set[str]] = []
+    summaries: list[dict[str, Any]] = []
+    component_failures: list[dict[str, Any]] = []
+    for record in records:
+        query_text = record["case"]["query"]
+        rules = build_rules_route(query_text, validation_level="balanced", mode="hybrid")
+        merged_caps = set(rules.required_capabilities)
+        summary = _semantic_summary(record["scores"], threshold, margin)
+        summaries.append(summary)
+        semantic = {"scores": record["scores"], **summary}
+        if summary["passed_threshold"] and summary["passed_margin"]:
+            merged_caps.add(str(summary["top_capability"]))
+        if router._classifier_configured():
+            try:
+                classifier = await router._classifier_route(query_text, rules.to_dict(), semantic)
+                for capability in classifier.get("required_capabilities") or []:
+                    if capability in ROUTABLE_CAPABILITIES and _classifier_can_add_capability(capability, rules):
+                        merged_caps.add(str(capability))
+            except Exception as exc:
+                if len(component_failures) < 10:
+                    component_failures.append(
+                        {
+                            "id": record["case"]["id"],
+                            "query": query_text,
+                            "component": "classifier",
+                            "error": str(exc),
+                        }
+                    )
+        predictions.append(set(_ordered_capabilities(merged_caps)))
+    return predictions, summaries, component_failures
+
+
+def _model_failure_result(model: str, start: float, error: str, error_type: str = "provider_error") -> dict[str, Any]:
+    return {
+        "model": model,
+        "ok": False,
+        "availability": "failed",
+        "error_type": error_type,
+        "error": error,
+        "dimension": 0,
+        "latency_ms": 0.0,
+        "semantic_macro_f1": 0.0,
+        "full_route_macro_f1": 0.0,
+        "recommended_threshold": None,
+        "recommended_margin": None,
+        "confusion_matrix": {},
+        "semantic_failures": [],
+        "full_route_failures": [],
+        "elapsed_ms": _elapsed_ms(start),
+    }
+
+
+async def _evaluate_calibration_model(model: str, dataset: list[dict[str, Any]], labels: list[str]) -> dict[str, Any]:
+    start = time.time()
+    proxy = _CalibrationConfigProxy(
+        config,
+        model,
+        _configured_embedding_threshold(),
+        _configured_embedding_margin(),
+    )
+    router = IntentRouter(proxy)
+    if not router._embeddings_configured():
+        return _model_failure_result(
+            model,
+            start,
+            "INTENT_EMBEDDING_API_URL and INTENT_EMBEDDING_API_KEY must be configured before calibration.",
+            "config_error",
+        )
+
+    utterances: list[tuple[str, str]] = []
+    for capability, examples in CAPABILITY_UTTERANCES.items():
+        for example in examples:
+            utterances.append((capability, example))
+    inputs = [item["query"] for item in dataset] + [example for _capability, example in utterances]
+    embed_start = time.time()
+    embeddings = await _embed_in_batches(router, inputs)
+    latency_ms = _elapsed_ms(embed_start)
+    if len(embeddings) != len(inputs):
+        return _model_failure_result(
+            model,
+            start,
+            f"Embedding response returned {len(embeddings)} rows for {len(inputs)} inputs.",
+        )
+    dimension = len(embeddings[0]) if embeddings else 0
+    query_embeddings = embeddings[: len(dataset)]
+    utterance_embeddings = embeddings[len(dataset) :]
+
+    records: list[dict[str, Any]] = []
+    for item, query_embedding in zip(dataset, query_embeddings):
+        scores: dict[str, float] = {}
+        for index, (capability, _example) in enumerate(utterances):
+            score = _cosine_similarity(query_embedding, utterance_embeddings[index])
+            scores[capability] = max(scores.get(capability, 0.0), score)
+        records.append({"case": item, "scores": scores})
+
+    expected = [set(item["expected_capabilities"]) for item in dataset]
+    best = _select_semantic_parameters(records, expected, labels)
+    semantic_predictions, semantic_summaries = _semantic_predictions(records, best["threshold"], best["margin"])
+    semantic_metrics = _macro_f1(expected, semantic_predictions, labels)
+    full_predictions, full_summaries, component_failures = await _full_route_predictions(
+        records,
+        best["threshold"],
+        best["margin"],
+        model,
+    )
+    full_metrics = _macro_f1(expected, full_predictions, labels)
+
+    return {
+        "model": model,
+        "ok": True,
+        "availability": "ok",
+        "dimension": dimension,
+        "latency_ms": latency_ms,
+        "semantic_macro_f1": semantic_metrics["macro_f1"],
+        "semantic_per_label_f1": semantic_metrics["per_label_f1"],
+        "full_route_macro_f1": full_metrics["macro_f1"],
+        "full_route_per_label_f1": full_metrics["per_label_f1"],
+        "recommended_threshold": round(float(best["threshold"]), 3),
+        "recommended_margin": round(float(best["margin"]), 3),
+        "recommendation_basis": "semantic_macro_f1",
+        "confusion_matrix": _confusion_matrix(expected, semantic_predictions),
+        "full_route_confusion_matrix": _confusion_matrix(expected, full_predictions),
+        "semantic_failures": _representative_failures(records, expected, semantic_predictions, semantic_summaries),
+        "full_route_failures": _representative_failures(records, expected, full_predictions, full_summaries),
+        "component_failures": component_failures,
+        "elapsed_ms": _elapsed_ms(start),
+    }
+
+
+async def route_calibrate(models: str = "") -> dict[str, Any]:
+    start = time.time()
+    selected_models = _parse_calibration_models(models)
+    dataset = _route_calibration_dataset()
+    labels = [*sorted(ROUTABLE_CAPABILITIES), "none"]
+    results: list[dict[str, Any]] = []
+    for model in selected_models:
+        try:
+            results.append(await _evaluate_calibration_model(model, dataset, labels))
+        except Exception as exc:
+            results.append(_model_failure_result(model, start, str(exc)))
+
+    successful = [item for item in results if item.get("ok")]
+    failed_models = [item.get("model") for item in results if not item.get("ok")]
+    recommended = None
+    if successful:
+        recommended = max(
+            successful,
+            key=lambda item: (
+                float(item.get("semantic_macro_f1") or 0.0),
+                float(item.get("full_route_macro_f1") or 0.0),
+                -float(item.get("latency_ms") or 0.0),
+            ),
+        )
+    ok = bool(successful)
+    data: dict[str, Any] = {
+        "ok": ok,
+        "metric": "semantic_macro_f1",
+        "primary_metric": "semantic_macro_f1",
+        "full_route_metric_role": "validation",
+        "models": selected_models,
+        "model_results": results,
+        "failed_models": failed_models,
+        "dataset_size": len(dataset),
+        "dataset_counts": {label: len(queries) for label, queries in ROUTE_CALIBRATION_QUERIES.items()},
+        "capabilities": sorted(ROUTABLE_CAPABILITIES),
+        "labels": labels,
+        "default_threshold": _configured_embedding_threshold(),
+        "default_margin": _configured_embedding_margin(),
+        "embedding_model": config.intent_embedding_model,
+        "recommended_model": recommended.get("model") if recommended else "",
+        "recommended_threshold": recommended.get("recommended_threshold") if recommended else None,
+        "recommended_margin": recommended.get("recommended_margin") if recommended else None,
+        "elapsed_ms": _elapsed_ms(start),
+    }
+    if ok:
+        data["error_type"] = ""
+        data["error"] = ""
+    else:
+        error_types = {
+            str(item.get("error_type") or "provider_error")
+            for item in results
+            if not item.get("ok")
+        }
+        data["error_type"] = "config_error" if "config_error" in error_types else "provider_error"
+        data["error"] = "No embedding model could be calibrated. See model_results for per-model errors."
     return data
 
 

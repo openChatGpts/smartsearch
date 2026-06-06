@@ -35,6 +35,10 @@ smart-search research QUERY
   [--fallback auto|off]
   [--format json|markdown|content]
   [--output PATH]
+smart-search route-calibrate
+  [--models CSV]
+  [--format json|markdown|content]
+  [--output PATH]
 
 smart-search doctor --format json|markdown|content
 smart-search diagnose openai-compatible
@@ -88,6 +92,7 @@ validate_minimum_profile() -> dict[str, Any]
 search(query, platform="", model="", extra_sources=0,
        validation="", fallback="", providers="auto") -> dict[str, Any]
 research(query, budget="deep", evidence_dir="", fallback="auto") -> dict[str, Any]
+route_calibrate(models="") -> dict[str, Any]
 doctor() -> dict[str, Any]
 diagnose_openai_compatible(timeout_seconds=30.0) -> dict[str, Any]
 smoke(mode="mock") -> dict[str, Any]
@@ -288,8 +293,36 @@ Intent router contract:
 - Embeddings are OpenAI-compatible `/embeddings` calls configured by
   `INTENT_EMBEDDING_API_URL`, `INTENT_EMBEDDING_API_KEY`, and
   `INTENT_EMBEDDING_MODEL`. They compare the user query with built-in
-  capability utterances and may add a capability only when the similarity score
-  clears the semantic threshold.
+  capability utterances.
+- `INTENT_EMBEDDING_THRESHOLD` defaults to `0.74`;
+  `INTENT_EMBEDDING_MARGIN` defaults to `0.05`. Both are model-specific
+  parameters: after changing `INTENT_EMBEDDING_MODEL`, users should rerun
+  `smart-search route-calibrate` before judging route quality.
+- Normal setup recommends the Qwen3-Embedding-8B preset:
+  `INTENT_EMBEDDING_API_URL=https://api.siliconflow.cn/v1/embeddings`,
+  `INTENT_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B`,
+  `INTENT_EMBEDDING_THRESHOLD=0.475`, and
+  `INTENT_EMBEDDING_MARGIN=0.053`. This preset must be applied by setup only;
+  do not change the global fallback defaults to the 8B values because users may
+  intentionally configure a different model.
+- When setup receives or prompts `Qwen/Qwen3-Embedding-8B` and threshold/margin
+  are not explicitly configured, it auto-fills `0.475` and `0.053`. Explicit
+  values win. Existing mismatched values should warn rather than being silently
+  overwritten.
+- Semantic routing may add a capability only when the top similarity score is
+  at least `INTENT_EMBEDDING_THRESHOLD` and the top-vs-second score gap is at
+  least `INTENT_EMBEDDING_MARGIN`. If the top score passes threshold but the
+  margin is too small, record ambiguous semantic signals and reasons but do not
+  add a capability from embeddings alone.
+- `smart-search route-calibrate --models CSV` evaluates embedding models on
+  the built-in calibration set. Its primary selection metric is semantic-only
+  Macro-F1; full-route Macro-F1 is validation for rules/classifier fallback
+  behavior and must not replace the primary selector.
+- Calibration output must record per-model availability, dimension, latency,
+  recommended threshold/margin, semantic and full-route Macro-F1, confusion
+  matrices, and representative failures. Unknown, unavailable, or failed
+  models must be returned as failed model entries without aborting the full
+  calibration run.
 - Classifier routing is OpenAI-compatible `/chat/completions` JSON
   classification configured by `INTENT_CLASSIFIER_API_URL`,
   `INTENT_CLASSIFIER_API_KEY`, and `INTENT_CLASSIFIER_MODEL`. The classifier
@@ -400,6 +433,10 @@ Interactive setup contract:
   `INTENT_ROUTER_TIMEOUT_SECONDS` without `--advanced`. The prompt must make
   clear that missing or failed remote router components degrade to local rules,
   and it must keep router keys masked.
+- Advanced and non-interactive setup must also expose
+  `INTENT_EMBEDDING_THRESHOLD` and `INTENT_EMBEDDING_MARGIN`. The default
+  grouped wizard may avoid asking for these values directly; the preferred user
+  path is to run `route-calibrate` and then set the recommended values.
 - `--non-interactive` must remain script-stable: it only saves flags passed on
   the command line and must not prompt, inspect local developer-only state, or
   call providers.
@@ -822,6 +859,20 @@ When this contract changes, add or update tests that assert:
 - `doctor --format markdown` renders a human-readable health report rather than
   raw JSON, and provider list commands render Markdown result lists or a clear
   no-results message.
+- `route-calibrate --format json` returns model entries for both successful and
+  failed embedding models without aborting the calibration run; JSON includes
+  semantic-only Macro-F1 as the primary metric, full-route Macro-F1 as
+  validation, recommended threshold/margin, confusion matrices, and failure
+  examples.
+- `route-calibrate --format markdown` and `--format content` render
+  human-readable summaries rather than raw JSON.
+- `doctor` and `route` include embedding model, threshold, margin, and
+  threshold/margin source fields without exposing API keys.
+- `doctor` and `route` recommend the Qwen3-Embedding-8B preset commands when
+  that model is configured but threshold/margin are default or mismatched.
+- Semantic routing tests cover top score over threshold but insufficient margin
+  not adding a capability, and classifier/rules still being able to route when
+  semantic output is ambiguous.
 - sports/current queries assert `web_current_intent=true`,
   `supplemental_paths` contains `web_search`, and a `web_search` provider
   attempt is recorded under `balanced`.

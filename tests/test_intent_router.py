@@ -149,6 +149,57 @@ async def test_semantic_router_can_add_capability_without_classifier(monkeypatch
     assert "classifier not configured" in result["degraded_reason"]
 
 
+@pytest.mark.asyncio
+async def test_semantic_router_marks_ambiguous_margin_without_adding_capability(monkeypatch):
+    monkeypatch.setenv("SMART_SEARCH_INTENT_ROUTER", "hybrid")
+    monkeypatch.setenv("INTENT_EMBEDDING_API_URL", "https://embed.example.com/embeddings")
+    monkeypatch.setenv("INTENT_EMBEDDING_API_KEY", "embed-secret")
+    monkeypatch.setenv("INTENT_EMBEDDING_MODEL", "embed-model")
+    monkeypatch.setenv("INTENT_EMBEDDING_THRESHOLD", "0.74")
+    monkeypatch.setenv("INTENT_EMBEDDING_MARGIN", "0.05")
+
+    async def fake_semantic_route(self, query):
+        return {"scores": {"web_search": 0.81, "docs_search": 0.79}}
+
+    monkeypatch.setattr(IntentRouter, "_semantic_route", fake_semantic_route)
+
+    result = await service.route("普通问题")
+
+    assert result["required_capabilities"] == []
+    assert result["intent_signals"]["semantic_top_capability"] == "web_search"
+    assert result["intent_signals"]["semantic_passed_threshold"] is True
+    assert result["intent_signals"]["semantic_passed_margin"] is False
+    assert any("embeddings ambiguous" in reason for reason in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_classifier_can_add_capability_when_semantic_is_ambiguous(monkeypatch):
+    monkeypatch.setenv("SMART_SEARCH_INTENT_ROUTER", "hybrid")
+    monkeypatch.setenv("INTENT_EMBEDDING_API_URL", "https://embed.example.com/embeddings")
+    monkeypatch.setenv("INTENT_EMBEDDING_API_KEY", "embed-secret")
+    monkeypatch.setenv("INTENT_EMBEDDING_MODEL", "embed-model")
+    monkeypatch.setenv("INTENT_CLASSIFIER_API_URL", "https://classifier.example.com/chat/completions")
+    monkeypatch.setenv("INTENT_CLASSIFIER_API_KEY", "classifier-secret")
+    monkeypatch.setenv("INTENT_CLASSIFIER_MODEL", "intent-mini")
+    monkeypatch.setenv("INTENT_EMBEDDING_THRESHOLD", "0.74")
+    monkeypatch.setenv("INTENT_EMBEDDING_MARGIN", "0.05")
+
+    async def fake_semantic_route(self, query):
+        return {"scores": {"docs_search": 0.82, "web_search": 0.8}}
+
+    async def fake_classifier_route(self, query, rules, semantic):
+        return {"required_capabilities": ["docs_search"], "confidence": 0.9, "reasons": ["docs intent"]}
+
+    monkeypatch.setattr(IntentRouter, "_semantic_route", fake_semantic_route)
+    monkeypatch.setattr(IntentRouter, "_classifier_route", fake_classifier_route)
+
+    result = await service.route("普通问题")
+
+    assert result["required_capabilities"] == ["docs_search"]
+    assert any("embeddings ambiguous" in reason for reason in result["reasons"])
+    assert any("classifier: docs intent" in reason for reason in result["reasons"])
+
+
 def test_deep_research_plan_uses_offline_rules_even_when_remote_router_configured(monkeypatch):
     monkeypatch.setenv("SMART_SEARCH_INTENT_ROUTER", "hybrid")
     monkeypatch.setenv("INTENT_EMBEDDING_API_URL", "https://embed.example.com/embeddings")

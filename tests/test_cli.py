@@ -66,6 +66,7 @@ def test_each_subcommand_help_exits_successfully(capsys):
         ["context7-library", "--help"],
         ["context7-docs", "--help"],
         ["deep", "--help"],
+        ["route-calibrate", "--help"],
         ["smoke", "--help"],
         ["doctor", "--help"],
         ["diagnose", "--help"],
@@ -125,6 +126,8 @@ def test_command_aliases_parse_to_canonical_commands():
         (["c7docs", "/facebook/react", "hooks"], "context7-docs"),
         (["ctx7-docs", "/facebook/react", "hooks"], "context7-docs"),
         (["dr", "query"], "deep"),
+        (["route-cal"], "route-calibrate"),
+        (["rcal"], "route-calibrate"),
         (["sm"], "smoke"),
         (["d"], "doctor"),
         (["diag", "openai-compatible"], "diagnose"),
@@ -392,7 +395,20 @@ def test_doctor_markdown_outputs_human_health_report(monkeypatch, capsys):
                 "ok": True,
                 "embeddings_configured": False,
                 "classifier_configured": True,
-                "embedding_model": "",
+                "embedding_model": "Qwen/Qwen3-Embedding-8B",
+                "embedding_threshold": 0.74,
+                "embedding_margin": 0.05,
+                "embedding_threshold_source": "default",
+                "embedding_margin_source": "default",
+                "embedding_preset_id": "qwen3-embedding-8b",
+                "embedding_preset_threshold": "0.475",
+                "embedding_preset_margin": "0.053",
+                "embedding_preset_recommended": True,
+                "embedding_preset_recommendation": "Qwen/Qwen3-Embedding-8B works best with calibrated threshold and margin.",
+                "embedding_preset_commands": [
+                    "smart-search config set INTENT_EMBEDDING_THRESHOLD 0.475",
+                    "smart-search config set INTENT_EMBEDDING_MARGIN 0.053",
+                ],
                 "classifier_model": "intent-mini",
                 "timeout_seconds": 8.0,
                 "degrades_to_rules": True,
@@ -429,6 +445,9 @@ def test_doctor_markdown_outputs_human_health_report(monkeypatch, capsys):
     assert "Tavily ok" in out
     assert "## Intent Router" in out
     assert "| classifier_configured | YES |" in out
+    assert "| embedding_preset | qwen3-embedding-8b |" in out
+    assert "Embedding Preset Recommendation" in out
+    assert "smart-search config set INTENT_EMBEDDING_THRESHOLD 0.475" in out
     assert "intent-mini" in out
 
 
@@ -440,6 +459,11 @@ def test_doctor_content_outputs_non_empty_summary(monkeypatch, capsys):
             "minimum_profile_ok": False,
             "capability_status": {
                 "main_search": {"ok": False, "configured": [], "fallback_chain": ["xai-responses", "openai-compatible"]}
+            },
+            "intent_router_status": {
+                "embedding_preset_recommendation": "Qwen/Qwen3-Embedding-8B works best with calibrated threshold and margin.",
+                "embedding_preset_threshold": "0.475",
+                "embedding_preset_margin": "0.053",
             },
             "error": "Missing required capability: main_search",
             "error_type": "config_error",
@@ -454,6 +478,7 @@ def test_doctor_content_outputs_non_empty_summary(monkeypatch, capsys):
     assert out.strip()
     assert "Doctor FAIL" in out
     assert "Minimum profile: FAIL" in out
+    assert "Embedding preset recommendation: threshold=0.475 margin=0.053" in out
     assert "Missing required capability" in out
 
 
@@ -1188,6 +1213,9 @@ def test_all_formatted_commands_have_non_json_markdown(monkeypatch):
     async def fake_research(query, budget="deep", evidence_dir="", fallback="auto"):
         return {"ok": True, "question": query, "content": "Research", "final_answer": "Research", "citations": [], "gap_check": {"gaps": []}}
 
+    async def fake_route_calibrate(models=""):
+        return {"ok": True, "primary_metric": "semantic_macro_f1", "dataset_size": 100, "model_results": [], "recommended_model": ""}
+
     def fake_plan(*args, **kwargs):
         return {"ok": True, "mode": "deep_research", "question": "q", "difficulty": "standard", "evidence_policy": "fetch_before_claim"}
 
@@ -1225,6 +1253,7 @@ def test_all_formatted_commands_have_non_json_markdown(monkeypatch):
     monkeypatch.setattr(cli.service, "doctor", fake_doctor)
     monkeypatch.setattr(cli.service, "smoke", fake_smoke)
     monkeypatch.setattr(cli.service, "research", fake_research)
+    monkeypatch.setattr(cli.service, "route_calibrate", fake_route_calibrate)
     monkeypatch.setattr(cli.service, "build_deep_research_plan", fake_plan)
     monkeypatch.setattr(cli.service, "config_path", fake_config_path)
     monkeypatch.setattr(cli.service, "config_list", fake_config_list)
@@ -1248,6 +1277,7 @@ def test_all_formatted_commands_have_non_json_markdown(monkeypatch):
         ("context7-library", ["context7-library", "react", "--format", "markdown"]),
         ("context7-docs", ["context7-docs", "/lib", "hooks", "--format", "markdown"]),
         ("deep", ["deep", "query", "--format", "markdown"]),
+        ("route-calibrate", ["route-calibrate", "--format", "markdown"]),
         ("research", ["research", "query", "--format", "markdown"]),
         ("smoke", ["smoke", "--format", "markdown"]),
         ("doctor", ["doctor", "--format", "markdown"]),
@@ -1278,6 +1308,7 @@ def test_all_formatted_commands_have_non_json_markdown(monkeypatch):
             "context7-library": {"ok": True, "results": [{"id": "/lib", "title": "Library"}]},
             "context7-docs": {"ok": True, "library_id": "/lib", "query": "hooks", "content": "Docs"},
             "deep": {"ok": True, "mode": "deep_research", "question": "q", "difficulty": "standard", "evidence_policy": "fetch_before_claim"},
+            "route-calibrate": {"ok": True, "primary_metric": "semantic_macro_f1", "dataset_size": 100, "model_results": [], "recommended_model": ""},
             "research": {"ok": True, "question": "q", "content": "Research", "final_answer": "Research", "citations": [], "gap_check": {"gaps": []}},
             "smoke": {"ok": True, "mode": "mock", "failed_cases": [], "cases": [{"name": "case", "ok": True}]},
             "doctor": {"ok": True, "config_status": "ok", "minimum_profile_ok": True},
@@ -1301,6 +1332,7 @@ def test_non_content_commands_have_non_empty_content_fallback():
         "skills": {"ok": True, "targets": [{"target": "codex", "status": "up_to_date"}], "status_counts": {"up_to_date": 1}},
         "exa-search": {"ok": True, "results": [{"title": "Example", "url": "https://example.com"}]},
         "anysearch-search": {"ok": True, "provider": "anysearch", "results": [{"title": "AnySearch", "url": ""}]},
+        "route-calibrate": {"ok": True, "primary_metric": "semantic_macro_f1", "dataset_size": 100, "model_results": [], "recommended_model": ""},
     }
     for command, data in cases.items():
         rendered = cli._render(command, data, "content")
@@ -1489,6 +1521,178 @@ def test_setup_non_interactive_saves_values(monkeypatch, capsys):
     assert "as-test-secret" not in out
     assert "embed-test-secret" not in out
     assert "classifier-test-secret" not in out
+
+
+def test_setup_non_interactive_autofills_qwen3_8b_embedding_preset(monkeypatch, tmp_path, capsys):
+    saved = {}
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": {}})
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-router",
+        "hybrid",
+        "--intent-embedding-api-key",
+        "embed-test-secret",
+        "--intent-embedding-model",
+        "Qwen/Qwen3-Embedding-8B",
+    ])
+    data = json.loads(capsys.readouterr().out)
+
+    assert code == cli.EXIT_OK
+    assert saved["INTENT_EMBEDDING_API_URL"] == "https://api.siliconflow.cn/v1/embeddings"
+    assert saved["INTENT_EMBEDDING_MODEL"] == "Qwen/Qwen3-Embedding-8B"
+    assert saved["INTENT_EMBEDDING_THRESHOLD"] == "0.475"
+    assert saved["INTENT_EMBEDDING_MARGIN"] == "0.053"
+    assert "warnings" not in data
+    assert "embed-test-secret" not in json.dumps(data)
+
+
+def test_setup_non_interactive_keeps_explicit_embedding_thresholds(monkeypatch, tmp_path, capsys):
+    saved = {}
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": {}})
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-embedding-model",
+        "Qwen/Qwen3-Embedding-8B",
+        "--intent-embedding-threshold",
+        "0.42",
+        "--intent-embedding-margin",
+        "0.07",
+    ])
+
+    assert code == cli.EXIT_OK
+    assert saved["INTENT_EMBEDDING_THRESHOLD"] == "0.42"
+    assert saved["INTENT_EMBEDDING_MARGIN"] == "0.07"
+    assert saved["INTENT_EMBEDDING_API_URL"] == "https://api.siliconflow.cn/v1/embeddings"
+
+
+def test_setup_non_interactive_does_not_apply_qwen3_8b_preset_to_other_models(monkeypatch, tmp_path, capsys):
+    saved = {}
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": {}})
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-embedding-model",
+        "custom-embedding-model",
+    ])
+
+    assert code == cli.EXIT_OK
+    assert saved == {"INTENT_EMBEDDING_MODEL": "custom-embedding-model"}
+
+
+def test_setup_non_interactive_does_not_apply_qwen3_8b_preset_without_model(monkeypatch, tmp_path, capsys):
+    saved = {}
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": {}})
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-embedding-api-key",
+        "embed-test-secret",
+    ])
+
+    assert code == cli.EXIT_OK
+    assert saved == {"INTENT_EMBEDDING_API_KEY": "embed-test-secret"}
+
+
+def test_setup_non_interactive_warns_when_qwen3_8b_existing_thresholds_mismatch(monkeypatch, tmp_path, capsys):
+    saved = {}
+    current = {
+        "INTENT_EMBEDDING_API_URL": "https://api.siliconflow.cn/v1/embeddings",
+        "INTENT_EMBEDDING_THRESHOLD": "0.74",
+        "INTENT_EMBEDDING_MARGIN": "0.05",
+    }
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": dict(current)})
+    monkeypatch.setattr(cli.service.config, "get_config_source", lambda key: "config_file" if key in current else "default")
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-embedding-model",
+        "Qwen/Qwen3-Embedding-8B",
+    ])
+    data = json.loads(capsys.readouterr().out)
+
+    assert code == cli.EXIT_OK
+    assert saved == {"INTENT_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-8B"}
+    assert "warnings" in data
+    assert any("INTENT_EMBEDDING_THRESHOLD" in warning and "0.475" in warning for warning in data["warnings"])
+    assert any("INTENT_EMBEDDING_MARGIN" in warning and "0.053" in warning for warning in data["warnings"])
+
+
+def test_setup_non_interactive_warns_without_overwriting_env_embedding_thresholds(monkeypatch, tmp_path, capsys):
+    saved = {}
+    monkeypatch.setattr(cli.service.config, "_config_file", tmp_path / "config.json")
+    monkeypatch.setenv("INTENT_EMBEDDING_THRESHOLD", "0.74")
+    monkeypatch.setenv("INTENT_EMBEDDING_MARGIN", "0.05")
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": {}})
+
+    code = cli.main([
+        "setup",
+        "--non-interactive",
+        "--intent-embedding-model",
+        "Qwen/Qwen3-Embedding-8B",
+    ])
+    data = json.loads(capsys.readouterr().out)
+
+    assert code == cli.EXIT_OK
+    assert saved == {
+        "INTENT_EMBEDDING_API_URL": "https://api.siliconflow.cn/v1/embeddings",
+        "INTENT_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-8B",
+    }
+    assert any("INTENT_EMBEDDING_THRESHOLD" in warning and "0.475" in warning for warning in data["warnings"])
+    assert any("INTENT_EMBEDDING_MARGIN" in warning and "0.053" in warning for warning in data["warnings"])
 
 
 def test_setup_non_interactive_rejects_legacy_flags(capsys):
@@ -2045,6 +2249,48 @@ def test_setup_guided_can_configure_intent_router(monkeypatch, capsys):
     assert "classifier-test-secret" not in captured.err
 
 
+def test_setup_guided_autofills_qwen3_8b_embedding_preset(monkeypatch, capsys):
+    saved = {}
+    answers = iter([
+        "skip",
+        "skip",
+        "skip",
+        "skip",
+        "n",
+        "y",
+        "hybrid",
+        "y",
+        "",
+        "",
+        "n",
+        "30",
+    ])
+    secrets = iter(["embed-test-secret"])
+
+    def fake_config_set(key, value):
+        saved[key] = value
+        return {"ok": True, "key": key, "value": "***", "config_file": "C:/tmp/config.json"}
+
+    monkeypatch.setattr(cli.service, "config_set", fake_config_set)
+    monkeypatch.setattr(cli.service, "config_path", lambda: {"ok": True, "config_file": "C:/tmp/config.json"})
+    monkeypatch.setattr(cli.service, "config_list", lambda show_secrets=False: {"ok": True, "values": saved.copy()})
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(secrets))
+
+    code = cli.main(["setup", "--skip-skills", "--lang", "en"])
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert saved["INTENT_EMBEDDING_API_URL"] == "https://api.siliconflow.cn/v1/embeddings"
+    assert saved["INTENT_EMBEDDING_API_KEY"] == "embed-test-secret"
+    assert saved["INTENT_EMBEDDING_MODEL"] == "Qwen/Qwen3-Embedding-8B"
+    assert saved["INTENT_EMBEDDING_THRESHOLD"] == "0.475"
+    assert saved["INTENT_EMBEDDING_MARGIN"] == "0.053"
+    assert "Recommended preset" in captured.err
+    assert "embed-test-secret" not in captured.out
+    assert "embed-test-secret" not in captured.err
+
+
 def test_setup_interactive_language_prompt(monkeypatch, capsys):
     saved = {}
     answers = iter(["en", "skip", "skip", "skip", "n", "n", "n"])
@@ -2104,6 +2350,20 @@ def test_route_command_outputs_json_markdown_and_content(monkeypatch, capsys):
             "degraded": True,
             "degraded_reason": "embeddings not configured",
             "reasons": ["rules matched docs/API/library terms"],
+            "embedding_model": "embed-model",
+            "embedding_threshold": 0.74,
+            "embedding_margin": 0.05,
+            "embedding_threshold_source": "default",
+            "embedding_margin_source": "default",
+            "embedding_preset_id": "qwen3-embedding-8b",
+            "embedding_preset_threshold": "0.475",
+            "embedding_preset_margin": "0.053",
+            "embedding_preset_recommended": True,
+            "embedding_preset_recommendation": "Qwen/Qwen3-Embedding-8B works best with calibrated threshold and margin.",
+            "embedding_preset_commands": [
+                "smart-search config set INTENT_EMBEDDING_THRESHOLD 0.475",
+                "smart-search config set INTENT_EMBEDDING_MARGIN 0.053",
+            ],
             "validation_level": validation or "balanced",
             "executed_search": False,
             "provider_selection": "not_executed",
@@ -2120,12 +2380,112 @@ def test_route_command_outputs_json_markdown_and_content(monkeypatch, capsys):
     markdown = capsys.readouterr().out
     assert markdown.startswith("# Intent Route")
     assert "Required capabilities: `docs_search`" in markdown
+    assert "Embedding threshold: `0.74` (default)" in markdown
+    assert "Embedding Preset Recommendation" in markdown
+    assert "smart-search config set INTENT_EMBEDDING_THRESHOLD 0.475" in markdown
     assert "rules matched docs/API/library terms" in markdown
 
     assert cli.main(["route", "React useEffect API docs", "--format", "content"]) == cli.EXIT_OK
     content = capsys.readouterr().out
     assert "capabilities=docs_search" in content
     assert "mode=hybrid" in content
+    assert "threshold=0.74(default)" in content
+    assert "embedding_preset_recommendation=threshold=0.475 margin=0.053" in content
+
+
+def test_route_calibrate_command_outputs_json_markdown_and_content(monkeypatch, capsys):
+    async def fake_route_calibrate(models=""):
+        return {
+            "ok": True,
+            "metric": "semantic_macro_f1",
+            "primary_metric": "semantic_macro_f1",
+            "models": [item.strip() for item in models.split(",") if item.strip()],
+            "dataset_size": 100,
+            "recommended_model": "good-model",
+            "recommended_threshold": 0.71,
+            "recommended_margin": 0.06,
+            "failed_models": ["bad-model"],
+            "model_results": [
+                {
+                    "model": "good-model",
+                    "ok": True,
+                    "dimension": 1024,
+                    "latency_ms": 12.3,
+                    "semantic_macro_f1": 0.95,
+                    "full_route_macro_f1": 0.9,
+                    "recommended_threshold": 0.71,
+                    "recommended_margin": 0.06,
+                    "semantic_failures": [
+                        {
+                            "id": "none-01",
+                            "query": "普通问题",
+                            "expected": "none",
+                            "predicted": "docs_search",
+                            "top_capability": "docs_search",
+                            "top_score": 0.77,
+                            "margin": 0.02,
+                        }
+                    ],
+                },
+                {
+                    "model": "bad-model",
+                    "ok": False,
+                    "error_type": "provider_error",
+                    "error": "model unavailable",
+                    "dimension": 0,
+                    "latency_ms": 0,
+                    "semantic_macro_f1": 0,
+                    "full_route_macro_f1": 0,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(cli.service, "route_calibrate", fake_route_calibrate)
+
+    assert cli.main(["route-calibrate", "--models", "good-model,bad-model", "--format", "json"]) == cli.EXIT_OK
+    json_data = json.loads(capsys.readouterr().out)
+    assert json_data["recommended_model"] == "good-model"
+    assert json_data["failed_models"] == ["bad-model"]
+
+    assert cli.main(["route-cal", "--models", "good-model,bad-model", "--format", "markdown"]) == cli.EXIT_OK
+    markdown = capsys.readouterr().out
+    assert markdown.startswith("# Route Calibration")
+    assert "good-model" in markdown
+    assert "bad-model" in markdown
+    assert not markdown.lstrip().startswith("{")
+
+    assert cli.main(["rcal", "--models", "good-model,bad-model", "--format", "content"]) == cli.EXIT_OK
+    content = capsys.readouterr().out
+    assert "Route calibration OK" in content
+    assert "recommended=good-model" in content
+    assert not content.lstrip().startswith("{")
+
+
+def test_route_calibrate_provider_error_uses_network_exit(monkeypatch, capsys):
+    async def fake_route_calibrate(models=""):
+        return {
+            "ok": False,
+            "error_type": "provider_error",
+            "error": "No embedding model could be calibrated. See model_results for per-model errors.",
+            "metric": "semantic_macro_f1",
+            "primary_metric": "semantic_macro_f1",
+            "models": ["bad-model"],
+            "dataset_size": 100,
+            "recommended_model": "",
+            "failed_models": ["bad-model"],
+            "model_results": [
+                {"model": "bad-model", "ok": False, "error_type": "provider_error", "error": "model unavailable"}
+            ],
+        }
+
+    monkeypatch.setattr(cli.service, "route_calibrate", fake_route_calibrate)
+
+    code = cli.main(["route-calibrate", "--models", "bad-model", "--format", "content"])
+
+    assert code == cli.EXIT_NETWORK_ERROR
+    out = capsys.readouterr().out
+    assert "Route calibration FAIL" in out
+    assert "failed=bad-model" in out
 
 
 def test_smoke_command_uses_service(monkeypatch, capsys):

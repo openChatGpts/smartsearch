@@ -155,10 +155,13 @@ The router output keeps old fields such as `docs_intent`, `zh_current_intent`, `
 Intent router rules:
 
 - `SMART_SEARCH_INTENT_ROUTER=hybrid|rules|off`, default `hybrid`.
-- Optional semantic routing uses `INTENT_EMBEDDING_API_URL`, `INTENT_EMBEDDING_API_KEY`, and `INTENT_EMBEDDING_MODEL`.
+- Optional semantic routing uses `INTENT_EMBEDDING_API_URL`, `INTENT_EMBEDDING_API_KEY`, `INTENT_EMBEDDING_MODEL`, `INTENT_EMBEDDING_THRESHOLD`, and `INTENT_EMBEDDING_MARGIN`.
+- Normal users should use the Qwen3-Embedding-8B preset: SiliconFlow endpoint `https://api.siliconflow.cn/v1/embeddings`, model `Qwen/Qwen3-Embedding-8B`, threshold `0.475`, and margin `0.053`. `smart-search setup` auto-fills threshold/margin when this model is selected and no explicit values are already configured.
+- Embedding thresholds are model-specific. Run `smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format json` after changing model/endpoint or refreshing the real-query calibration set; use semantic-only Macro-F1 as the primary selector and full-route Macro-F1 as validation.
 - Optional model classification uses `INTENT_CLASSIFIER_API_URL`, `INTENT_CLASSIFIER_API_KEY`, and `INTENT_CLASSIFIER_MODEL`.
 - `INTENT_ROUTER_TIMEOUT_SECONDS` defaults to `8`.
 - Missing or failing embeddings/classifier degrade to rules and should not fail ordinary `search`.
+- Semantic matches add a capability only when the top score reaches `INTENT_EMBEDDING_THRESHOLD` and the top-vs-second gap reaches `INTENT_EMBEDDING_MARGIN`; ambiguous semantic matches are recorded as signals only.
 - The router returns capabilities only: `docs_search`, `web_search`, `web_fetch`, `vertical_search`.
 - Classifier output cannot select providers. Unknown capability names and provider names are ignored.
 - `deep` remains offline and must not call embeddings or classifier components.
@@ -307,9 +310,12 @@ smart-search config set ANYSEARCH_API_URL "https://api.anysearch.com/mcp" --form
 smart-search config set ANYSEARCH_API_KEY "key" --format json
 smart-search config set ANYSEARCH_TIMEOUT_SECONDS "30" --format json
 smart-search config set SMART_SEARCH_INTENT_ROUTER "hybrid" --format json
-smart-search config set INTENT_EMBEDDING_API_URL "https://api.openai.com/v1/embeddings" --format json
+smart-search config set INTENT_EMBEDDING_API_URL "https://api.siliconflow.cn/v1/embeddings" --format json
 smart-search config set INTENT_EMBEDDING_API_KEY "key" --format json
-smart-search config set INTENT_EMBEDDING_MODEL "text-embedding-3-small" --format json
+smart-search config set INTENT_EMBEDDING_MODEL "Qwen/Qwen3-Embedding-8B" --format json
+smart-search config set INTENT_EMBEDDING_THRESHOLD "0.475" --format json
+smart-search config set INTENT_EMBEDDING_MARGIN "0.053" --format json
+smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format json
 smart-search config set INTENT_CLASSIFIER_API_URL "https://api.openai.com/v1/chat/completions" --format json
 smart-search config set INTENT_CLASSIFIER_API_KEY "key" --format json
 smart-search config set INTENT_CLASSIFIER_MODEL "gpt-4.1-mini" --format json

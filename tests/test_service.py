@@ -24,6 +24,8 @@ def _reset_config(monkeypatch, tmp_path):
         "INTENT_EMBEDDING_API_URL",
         "INTENT_EMBEDDING_API_KEY",
         "INTENT_EMBEDDING_MODEL",
+        "INTENT_EMBEDDING_THRESHOLD",
+        "INTENT_EMBEDDING_MARGIN",
         "INTENT_CLASSIFIER_API_URL",
         "INTENT_CLASSIFIER_API_KEY",
         "INTENT_CLASSIFIER_MODEL",
@@ -129,6 +131,8 @@ def test_intent_router_config_defaults_and_saved_values(monkeypatch, tmp_path):
     assert service.config.intent_embedding_api_url == ""
     assert service.config.intent_embedding_api_key is None
     assert service.config.intent_embedding_model == ""
+    assert service.config.intent_embedding_threshold == 0.74
+    assert service.config.intent_embedding_margin == 0.05
     assert service.config.intent_classifier_api_url == ""
     assert service.config.intent_classifier_api_key is None
     assert service.config.intent_classifier_model == ""
@@ -138,6 +142,8 @@ def test_intent_router_config_defaults_and_saved_values(monkeypatch, tmp_path):
     service.config_set("INTENT_EMBEDDING_API_URL", "https://embed.example.com/v1/embeddings")
     service.config_set("INTENT_EMBEDDING_API_KEY", "embed-secret")
     service.config_set("INTENT_EMBEDDING_MODEL", "embed-model")
+    service.config_set("INTENT_EMBEDDING_THRESHOLD", "0.62")
+    service.config_set("INTENT_EMBEDDING_MARGIN", "0.08")
     service.config_set("INTENT_CLASSIFIER_API_URL", "https://classifier.example.com/v1/chat/completions")
     service.config_set("INTENT_CLASSIFIER_API_KEY", "classifier-secret")
     service.config_set("INTENT_CLASSIFIER_MODEL", "intent-mini")
@@ -147,6 +153,8 @@ def test_intent_router_config_defaults_and_saved_values(monkeypatch, tmp_path):
     assert service.config.intent_embedding_api_url == "https://embed.example.com/v1/embeddings"
     assert service.config.intent_embedding_api_key == "embed-secret"
     assert service.config.intent_embedding_model == "embed-model"
+    assert service.config.intent_embedding_threshold == 0.62
+    assert service.config.intent_embedding_margin == 0.08
     assert service.config.intent_classifier_api_url == "https://classifier.example.com/v1/chat/completions"
     assert service.config.intent_classifier_api_key == "classifier-secret"
     assert service.config.intent_classifier_model == "intent-mini"
@@ -154,6 +162,23 @@ def test_intent_router_config_defaults_and_saved_values(monkeypatch, tmp_path):
     saved = service.config_list()["values"]
     assert saved["INTENT_EMBEDDING_API_KEY"] != "embed-secret"
     assert saved["INTENT_CLASSIFIER_API_KEY"] != "classifier-secret"
+
+
+def test_intent_router_invalid_embedding_threshold_and_margin_are_reported(monkeypatch, tmp_path):
+    _reset_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("INTENT_EMBEDDING_THRESHOLD", "1.2")
+    monkeypatch.setenv("INTENT_EMBEDDING_MARGIN", "-0.1")
+
+    info = service.config.get_config_info()
+    status = service.intent_router_status()
+
+    assert info["INTENT_EMBEDDING_THRESHOLD"] == 0.74
+    assert info["INTENT_EMBEDDING_MARGIN"] == 0.05
+    assert any("Invalid INTENT_EMBEDDING_THRESHOLD" in error for error in info["config_parameter_errors"])
+    assert any("Invalid INTENT_EMBEDDING_MARGIN" in error for error in info["config_parameter_errors"])
+    assert status["ok"] is False
+    assert "Invalid INTENT_EMBEDDING_THRESHOLD" in status["error"]
+    assert "Invalid INTENT_EMBEDDING_MARGIN" in status["error"]
 
 
 def test_intent_router_invalid_timeout_is_reported_in_config_info(monkeypatch, tmp_path):
@@ -167,6 +192,89 @@ def test_intent_router_invalid_timeout_is_reported_in_config_info(monkeypatch, t
     assert any("Invalid INTENT_ROUTER_TIMEOUT_SECONDS" in error for error in info["config_parameter_errors"])
     assert status["ok"] is False
     assert "Invalid INTENT_ROUTER_TIMEOUT_SECONDS" in status["error"]
+
+
+def test_intent_router_status_recommends_qwen3_8b_preset_until_thresholds_match(monkeypatch, tmp_path):
+    _reset_config(monkeypatch, tmp_path)
+    service.config_set("INTENT_EMBEDDING_API_URL", "https://api.siliconflow.cn/v1/embeddings")
+    service.config_set("INTENT_EMBEDDING_API_KEY", "embed-secret")
+    service.config_set("INTENT_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B")
+
+    status = service.intent_router_status()
+
+    assert status["embedding_preset_id"] == "qwen3-embedding-8b"
+    assert status["embedding_preset_recommended"] is True
+    assert status["embedding_preset_threshold"] == "0.475"
+    assert status["embedding_preset_margin"] == "0.053"
+    assert status["embedding_preset_commands"] == [
+        "smart-search config set INTENT_EMBEDDING_THRESHOLD 0.475",
+        "smart-search config set INTENT_EMBEDDING_MARGIN 0.053",
+    ]
+
+    service.config_set("INTENT_EMBEDDING_THRESHOLD", "0.475")
+    service.config_set("INTENT_EMBEDDING_MARGIN", "0.053")
+    status = service.intent_router_status()
+
+    assert status["embedding_preset_recommended"] is False
+    assert status["embedding_preset_commands"] == []
+    assert status["embedding_preset_threshold_matches"] is True
+    assert status["embedding_preset_margin_matches"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_calibrate_records_failed_model_without_aborting(monkeypatch, tmp_path):
+    _reset_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("INTENT_EMBEDDING_API_URL", "https://embed.example.com/v1/embeddings")
+    monkeypatch.setenv("INTENT_EMBEDDING_API_KEY", "embed-secret")
+    monkeypatch.setenv("INTENT_EMBEDDING_MODEL", "configured-model")
+
+    sample_dataset = [
+        {"id": "docs-01", "query": "React docs", "expected_capabilities": ["docs_search"], "expected_label": "docs_search"},
+        {"id": "web-01", "query": "today news", "expected_capabilities": ["web_search"], "expected_label": "web_search"},
+        {"id": "none-01", "query": "rewrite this sentence", "expected_capabilities": [], "expected_label": "none"},
+    ]
+    monkeypatch.setattr(service, "_route_calibration_dataset", lambda: sample_dataset)
+
+    async def fake_embed(self, inputs):
+        if self.config.intent_embedding_model == "bad-model":
+            raise RuntimeError("model unavailable")
+        vectors = {
+            "React docs": [1.0, 0.0, 0.0],
+            "today news": [0.0, 1.0, 0.0],
+            "rewrite this sentence": [0.0, 0.0, 1.0],
+        }
+        out = []
+        for value in inputs:
+            text = value.lower()
+            if value in vectors:
+                out.append(vectors[value])
+            elif "doc" in text or "api" in text or "sdk" in text or "react" in text:
+                out.append([1.0, 0.0, 0.0])
+            elif "today" in text or "latest" in text or "新闻" in text:
+                out.append([0.0, 1.0, 0.0])
+            elif "url" in text or "http" in text:
+                out.append([0.0, 0.0, 0.9])
+            else:
+                out.append([0.0, 0.0, 1.0])
+        return out
+
+    monkeypatch.setattr(service.IntentRouter, "_embed", fake_embed)
+
+    result = await service.route_calibrate(models="good-model,bad-model")
+
+    assert result["ok"] is True
+    assert result["dataset_size"] == 3
+    assert result["recommended_model"] == "good-model"
+    assert result["failed_models"] == ["bad-model"]
+    good = result["model_results"][0]
+    bad = result["model_results"][1]
+    assert good["ok"] is True
+    assert good["dimension"] == 3
+    assert good["recommended_threshold"] is not None
+    assert "semantic_macro_f1" in good
+    assert bad["ok"] is False
+    assert bad["error_type"] == "provider_error"
+    assert "model unavailable" in bad["error"]
 
 
 def test_anysearch_config_defaults_and_saved_values(monkeypatch, tmp_path):

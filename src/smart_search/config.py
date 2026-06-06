@@ -17,6 +17,8 @@ class Config:
     _DEFAULT_MINIMUM_PROFILE = "standard"
     _DEFAULT_INTENT_ROUTER_MODE = "hybrid"
     _DEFAULT_INTENT_ROUTER_TIMEOUT_SECONDS = "8"
+    _DEFAULT_INTENT_EMBEDDING_THRESHOLD = "0.74"
+    _DEFAULT_INTENT_EMBEDDING_MARGIN = "0.05"
     _ALLOWED_XAI_TOOLS = {"web_search", "x_search"}
     _ALLOWED_VALIDATION_LEVELS = {"fast", "balanced", "strict"}
     _ALLOWED_FALLBACK_MODES = {"auto", "off"}
@@ -40,6 +42,8 @@ class Config:
         "INTENT_EMBEDDING_API_URL",
         "INTENT_EMBEDDING_API_KEY",
         "INTENT_EMBEDDING_MODEL",
+        "INTENT_EMBEDDING_THRESHOLD",
+        "INTENT_EMBEDDING_MARGIN",
         "INTENT_CLASSIFIER_API_URL",
         "INTENT_CLASSIFIER_API_KEY",
         "INTENT_CLASSIFIER_MODEL",
@@ -385,6 +389,18 @@ class Config:
         except ValueError as e:
             return float(default), str(e)
 
+    def _bounded_float_value(self, key: str, default: str, minimum: float, maximum: float) -> float:
+        value = self._float_value(key, default)
+        if value < minimum or value > maximum:
+            raise ValueError(f"Invalid {key}: {value}. Expected a number between {minimum:g} and {maximum:g}.")
+        return value
+
+    def _bounded_float_info(self, key: str, default: str, minimum: float, maximum: float) -> tuple[float, str]:
+        try:
+            return self._bounded_float_value(key, default, minimum, maximum), ""
+        except ValueError as e:
+            return float(default), str(e)
+
     @property
     def validation_level(self) -> str:
         return self._validated_enum(
@@ -428,6 +444,14 @@ class Config:
     @property
     def intent_embedding_model(self) -> str:
         return self._get_config_value("INTENT_EMBEDDING_MODEL", "") or ""
+
+    @property
+    def intent_embedding_threshold(self) -> float:
+        return self._bounded_float_value("INTENT_EMBEDDING_THRESHOLD", self._DEFAULT_INTENT_EMBEDDING_THRESHOLD, 0.0, 1.0)
+
+    @property
+    def intent_embedding_margin(self) -> float:
+        return self._bounded_float_value("INTENT_EMBEDDING_MARGIN", self._DEFAULT_INTENT_EMBEDDING_MARGIN, 0.0, 1.0)
 
     @property
     def intent_classifier_api_url(self) -> str:
@@ -670,7 +694,31 @@ class Config:
             "INTENT_ROUTER_TIMEOUT_SECONDS",
             self._DEFAULT_INTENT_ROUTER_TIMEOUT_SECONDS,
         )
-        config_parameter_errors.extend(error for error in (validation_error, fallback_error, minimum_error, intent_router_error, intent_router_timeout_error) if error)
+        intent_embedding_threshold, intent_embedding_threshold_error = self._bounded_float_info(
+            "INTENT_EMBEDDING_THRESHOLD",
+            self._DEFAULT_INTENT_EMBEDDING_THRESHOLD,
+            0.0,
+            1.0,
+        )
+        intent_embedding_margin, intent_embedding_margin_error = self._bounded_float_info(
+            "INTENT_EMBEDDING_MARGIN",
+            self._DEFAULT_INTENT_EMBEDDING_MARGIN,
+            0.0,
+            1.0,
+        )
+        config_parameter_errors.extend(
+            error
+            for error in (
+                validation_error,
+                fallback_error,
+                minimum_error,
+                intent_router_error,
+                intent_router_timeout_error,
+                intent_embedding_threshold_error,
+                intent_embedding_margin_error,
+            )
+            if error
+        )
         if config_parameter_errors and config_status.startswith("ok:"):
             config_status = f"config_error: {'; '.join(config_parameter_errors)}"
 
@@ -692,6 +740,8 @@ class Config:
             "INTENT_EMBEDDING_API_URL": self.intent_embedding_api_url or "未配置",
             "INTENT_EMBEDDING_API_KEY": self._mask_api_key(self.intent_embedding_api_key) if self.intent_embedding_api_key else "未配置",
             "INTENT_EMBEDDING_MODEL": self.intent_embedding_model or "未配置",
+            "INTENT_EMBEDDING_THRESHOLD": intent_embedding_threshold,
+            "INTENT_EMBEDDING_MARGIN": intent_embedding_margin,
             "INTENT_CLASSIFIER_API_URL": self.intent_classifier_api_url or "未配置",
             "INTENT_CLASSIFIER_API_KEY": self._mask_api_key(self.intent_classifier_api_key) if self.intent_classifier_api_key else "未配置",
             "INTENT_CLASSIFIER_MODEL": self.intent_classifier_model or "未配置",

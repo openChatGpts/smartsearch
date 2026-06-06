@@ -35,10 +35,11 @@
 - `smart-search context7-docs LIBRARY_ID QUERY [--format json|markdown|content] [--output PATH]`
 - `smart-search deep QUERY [--budget quick|standard|deep] [--evidence-dir PATH] [--format json|markdown|content] [--output PATH]`
 - `smart-search research QUERY [--budget quick|standard|deep] [--evidence-dir PATH] [--fallback auto|off] [--format json|markdown|content] [--output PATH]`
+- `smart-search route-calibrate [--models CSV] [--format json|markdown|content] [--output PATH]`
 - `smart-search map URL [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--format json|markdown|content] [--output PATH]`
 - `smart-search doctor [--format json|markdown|content] [--output PATH]`
 - `smart-search diagnose openai-compatible [--timeout SECONDS] [--format json|markdown] [--output PATH]`
-- `smart-search setup [--lang zh|en] [--advanced] [--non-interactive] [--skip-skills] [--install-skills CSV] [--skills-root PATH] [--xai-api-url URL] [--xai-api-key KEY] [--xai-model ID] [--xai-tools-explicit CSV] [--openai-compatible-api-url URL] [--openai-compatible-api-key KEY] [--openai-compatible-model ID] [--openai-compatible-stream true|false] [--validation-level fast|balanced|strict] [--fallback-mode auto|off] [--minimum-profile standard|off] [--intent-router hybrid|rules|off] [--intent-embedding-api-url URL] [--intent-embedding-api-key KEY] [--intent-embedding-model ID] [--intent-classifier-api-url URL] [--intent-classifier-api-key KEY] [--intent-classifier-model ID] [--intent-router-timeout SECONDS] [--exa-key KEY] [--context7-key KEY] [--zhipu-key KEY] [--zhipu-api-url URL] [--zhipu-search-engine ENGINE] [--zhipu-mcp-key KEY] [--zhipu-mcp-search-api-url URL] [--zhipu-mcp-reader-api-url URL] [--zhipu-mcp-zread-api-url URL] [--zhipu-mcp-timeout SECONDS] [--jina-key KEY] [--jina-reader-api-url URL] [--jina-respond-with MODE] [--jina-timeout SECONDS] [--tavily-api-url URL] [--tavily-key KEY] [--firecrawl-api-url URL] [--firecrawl-key KEY] [--anysearch-api-url URL] [--anysearch-key KEY] [--anysearch-timeout SECONDS] [--format json|markdown|content] [--output PATH]`
+- `smart-search setup [--lang zh|en] [--advanced] [--non-interactive] [--skip-skills] [--install-skills CSV] [--skills-root PATH] [--xai-api-url URL] [--xai-api-key KEY] [--xai-model ID] [--xai-tools-explicit CSV] [--openai-compatible-api-url URL] [--openai-compatible-api-key KEY] [--openai-compatible-model ID] [--openai-compatible-stream true|false] [--validation-level fast|balanced|strict] [--fallback-mode auto|off] [--minimum-profile standard|off] [--intent-router hybrid|rules|off] [--intent-embedding-api-url URL] [--intent-embedding-api-key KEY] [--intent-embedding-model ID] [--intent-embedding-threshold FLOAT] [--intent-embedding-margin FLOAT] [--intent-classifier-api-url URL] [--intent-classifier-api-key KEY] [--intent-classifier-model ID] [--intent-router-timeout SECONDS] [--exa-key KEY] [--context7-key KEY] [--zhipu-key KEY] [--zhipu-api-url URL] [--zhipu-search-engine ENGINE] [--zhipu-mcp-key KEY] [--zhipu-mcp-search-api-url URL] [--zhipu-mcp-reader-api-url URL] [--zhipu-mcp-zread-api-url URL] [--zhipu-mcp-timeout SECONDS] [--jina-key KEY] [--jina-reader-api-url URL] [--jina-respond-with MODE] [--jina-timeout SECONDS] [--tavily-api-url URL] [--tavily-key KEY] [--firecrawl-api-url URL] [--firecrawl-key KEY] [--anysearch-api-url URL] [--anysearch-key KEY] [--anysearch-timeout SECONDS] [--format json|markdown|content] [--output PATH]`
 - `smart-search config path [--format json|markdown|content] [--output PATH]`
 - `smart-search config list [--format json|markdown|content] [--output PATH]`
 - `smart-search config set KEY VALUE [--format json|markdown|content] [--output PATH]`
@@ -76,6 +77,7 @@ Top-level aliases must normalize to the same service behavior as their full comm
 | `context7-docs` | `c7d`, `c7docs`, `ctx7-docs` |
 | `deep` | `dr` |
 | `research` | `rs` |
+| `route-calibrate` | `route-cal`, `rcal` |
 | `doctor` | `d` |
 | `diagnose` | `diag` |
 | `setup` | `init` |
@@ -99,13 +101,15 @@ Nested aliases:
 
 Successful search output includes `ok`, `query`, `primary_api_mode`, `content`, `sources`, `sources_count`, `primary_sources`, `primary_sources_count`, `extra_sources`, `extra_sources_count`, `source_warning`, `routing_decision`, `providers_used`, `provider_attempts`, `fallback_used`, `validation_level`, and `elapsed_ms`. Each source should include at least `url` when available.
 
-Route diagnostic output includes `ok`, `query`, `executed_search=false`, `provider_selection=not_executed`, backward-compatible fields `docs_intent`, `zh_current_intent`, `web_current_intent`, `fetch_intent`, `supplemental_paths`, and unified intent-router fields `intent_router_mode`, `required_capabilities`, `intent_signals`, `confidence`, `router_engines_used`, `degraded`, `degraded_reason`, and `reasons`. `smart-search route` must not call search/docs/fetch providers.
+Route diagnostic output includes `ok`, `query`, `executed_search=false`, `provider_selection=not_executed`, backward-compatible fields `docs_intent`, `zh_current_intent`, `web_current_intent`, `fetch_intent`, `supplemental_paths`, and unified intent-router fields `intent_router_mode`, `required_capabilities`, `intent_signals`, `confidence`, `router_engines_used`, `degraded`, `degraded_reason`, `reasons`, `embedding_model`, `embedding_threshold`, `embedding_margin`, `embedding_threshold_source`, and `embedding_margin_source`. `smart-search route` must not call search/docs/fetch providers.
+
+Route calibration output includes `ok`, `metric`, `primary_metric=semantic_macro_f1`, `full_route_metric_role=validation`, `models`, `model_results`, `dataset_size`, `dataset_counts`, `capabilities`, `recommended_model`, `recommended_threshold`, `recommended_margin`, and `failed_models`. Each model result records `ok`, `model`, availability/error fields, embedding `dimension`, `latency_ms`, `semantic_macro_f1`, `full_route_macro_f1`, recommended threshold/margin, confusion matrices, and representative failures. A failed embedding model must be recorded as `ok=false` inside `model_results` without aborting the full calibration run.
 
 `--format json` is the stable machine-readable contract for agents and scripts. JSON output remains parseable and uses readable non-ASCII text when the terminal encoding supports it.
 
-`--format markdown` is the human-readable report format. `route --format markdown` must render the selected capabilities, engines, confidence, degradation reason, reasons, and signals without provider execution. `doctor --format markdown` must render a detailed diagnostic report with overall status, active/default/legacy config paths, log path resolution, file-logging status, masked config values with sources, minimum profile, capability status, main-search provider checks, provider connectivity checks, intent router status, model metadata, and full long error/message detail instead of falling back to raw JSON. `diagnose openai-compatible --format markdown` must render a short copy-pasteable troubleshooting report with masked config, quick chat check, real search-shape `stream=false` and `stream=true` checks, a plain-language summary, and a next command. Provider list commands such as `exa-search`, `exa-similar`, `zhipu-search`, `anysearch-*`, `context7-library`, and `map` render result lists or a clear no-results message.
+`--format markdown` is the human-readable report format. `route --format markdown` must render the selected capabilities, engines, confidence, embedding model/threshold/margin, degradation reason, reasons, and signals without provider execution. `route-calibrate --format markdown` must render a model comparison report rather than raw JSON. `doctor --format markdown` must render a detailed diagnostic report with overall status, active/default/legacy config paths, log path resolution, file-logging status, masked config values with sources, minimum profile, capability status, main-search provider checks, provider connectivity checks, intent router status, embedding threshold/margin metadata, model metadata, and full long error/message detail instead of falling back to raw JSON. `diagnose openai-compatible --format markdown` must render a short copy-pasteable troubleshooting report with masked config, quick chat check, real search-shape `stream=false` and `stream=true` checks, a plain-language summary, and a next command. Provider list commands such as `exa-search`, `exa-similar`, `zhipu-search`, `anysearch-*`, `context7-library`, and `map` render result lists or a clear no-results message.
 
-`--format content` prints only the `content` field for content-bearing commands such as `search`, `fetch`, `context7-docs`, and `research`. Commands without a `content` field, including `route`, `doctor`, `smoke`, `config`, and `model`, must print a compact non-empty text summary rather than an empty stdout.
+`--format content` prints only the `content` field for content-bearing commands such as `search`, `fetch`, `context7-docs`, and `research`. Commands without a `content` field, including `route`, `route-calibrate`, `doctor`, `smoke`, `config`, and `model`, must print a compact non-empty text summary rather than an empty stdout.
 
 Source provenance fields:
 
@@ -164,13 +168,18 @@ Intent router:
 
 - `SMART_SEARCH_INTENT_ROUTER` accepts `hybrid`, `rules`, and `off`; default is `hybrid`.
 - `INTENT_EMBEDDING_API_URL`, `INTENT_EMBEDDING_API_KEY`, and `INTENT_EMBEDDING_MODEL` configure optional OpenAI-compatible embeddings for semantic capability routing.
+- `INTENT_EMBEDDING_THRESHOLD` defaults to `0.74`; `INTENT_EMBEDDING_MARGIN` defaults to `0.05`. Both are model-specific parameters. Normal setup should recommend the Qwen3-Embedding-8B preset: `INTENT_EMBEDDING_API_URL=https://api.siliconflow.cn/v1/embeddings`, `INTENT_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B`, `INTENT_EMBEDDING_THRESHOLD=0.475`, and `INTENT_EMBEDDING_MARGIN=0.053`.
+- When setup receives or prompts `Qwen/Qwen3-Embedding-8B` and threshold/margin are not explicitly configured, it auto-fills `0.475` and `0.053`. Explicit threshold/margin values win. Existing mismatched threshold/margin values should produce a warning rather than being silently overwritten.
+- Semantic routing may add a capability only when the top score is at least `INTENT_EMBEDDING_THRESHOLD` and the top-vs-second score gap is at least `INTENT_EMBEDDING_MARGIN`; otherwise ambiguous semantic matches are recorded as signals only.
+- `smart-search route-calibrate --models CSV` evaluates embedding models on the built-in calibration set. The primary selector is semantic-only Macro-F1; full-route Macro-F1 validates rules/classifier fallback behavior.
+- After changing `INTENT_EMBEDDING_MODEL`, changing embedding endpoints, or refreshing the real-query calibration set, users should rerun `route-calibrate` and then set `INTENT_EMBEDDING_THRESHOLD` and `INTENT_EMBEDDING_MARGIN` from the report.
 - `INTENT_CLASSIFIER_API_URL`, `INTENT_CLASSIFIER_API_KEY`, and `INTENT_CLASSIFIER_MODEL` configure optional OpenAI-compatible chat-completions classification.
 - `INTENT_ROUTER_TIMEOUT_SECONDS` defaults to `8` and applies only to optional remote router calls.
 - Hybrid mode is fail-open: missing or failing embeddings/classifier record `degraded=true` and `degraded_reason`, then local rules still route the request.
 - The router returns capabilities only: `docs_search`, `web_search`, `web_fetch`, and `vertical_search`. It must not select providers.
 - Classifier output is capability-whitelisted. Unknown capability names and provider names are ignored and recorded in route reasons.
 - `search` and `research` use the unified router. `deep` remains an offline planner and must not call embeddings or classifier components.
-- `doctor` reports intent router mode, whether embeddings/classifier are configured, model names, timeout, and that it degrades to rules. It must not expose router API keys.
+- `doctor` and `route` report intent router mode, whether embeddings/classifier are configured, embedding model, threshold, margin, threshold/margin source, Qwen3-Embedding-8B preset recommendation/commands when mismatched, timeout, and that it degrades to rules. They must not expose router API keys.
 
 AnySearch experimental output:
 
@@ -327,6 +336,7 @@ Interactive setup behavior:
 - Required groups are `main_search`, `docs_search`, and `web_fetch`; `web_search` is optional reinforcement, followed by optional smart intent router configuration.
 - `--lang zh|en` skips the language question.
 - Default guided setup can configure `SMART_SEARCH_INTENT_ROUTER`, `INTENT_EMBEDDING_*`, `INTENT_CLASSIFIER_*`, and `INTENT_ROUTER_TIMEOUT_SECONDS` without `--advanced`; missing remote router pieces still degrade to rules.
+- Default guided setup recommends SiliconFlow + `Qwen/Qwen3-Embedding-8B` for embeddings and auto-fills threshold `0.475` plus margin `0.053` when no explicit threshold/margin exists.
 - `--advanced` shows low-level config keys one by one for compatibility with older setup behavior and does not show the skill prompt unless `--install-skills` is explicit.
 - `--non-interactive` keeps script behavior and only saves values passed as flags.
 - Unchecking a configured provider must not delete existing config values; use

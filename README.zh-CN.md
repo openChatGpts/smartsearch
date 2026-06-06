@@ -270,15 +270,27 @@ smart-search deep "https://example.com/source" --format json
 | 配置项 | 用途 |
 | --- | --- |
 | `SMART_SEARCH_INTENT_ROUTER` | `hybrid`、`rules` 或 `off`，默认 `hybrid` |
-| `INTENT_EMBEDDING_API_URL` | 可选 OpenAI-compatible embeddings endpoint，用于语义能力路由 |
+| `INTENT_EMBEDDING_API_URL` | 可选 OpenAI-compatible embeddings endpoint，用于语义能力路由；推荐 setup preset 使用 `https://api.siliconflow.cn/v1/embeddings` |
 | `INTENT_EMBEDDING_API_KEY` | 可选 embeddings key；`doctor` 和 config 输出会脱敏 |
-| `INTENT_EMBEDDING_MODEL` | embeddings 模型名 |
+| `INTENT_EMBEDDING_MODEL` | embeddings 模型名；推荐 setup preset 使用 `Qwen/Qwen3-Embedding-8B` |
+| `INTENT_EMBEDDING_THRESHOLD` | 语义路由阈值，默认 `0.74`；推荐 8B setup 值是 `0.475`；这是模型相关参数 |
+| `INTENT_EMBEDDING_MARGIN` | top1 与第二名分数差阈值，默认 `0.05`；推荐 8B setup 值是 `0.053`；差距不足时只记录 ambiguous 信号，不直接加 capability |
 | `INTENT_CLASSIFIER_API_URL` | 可选 OpenAI-compatible chat-completions endpoint，用于结构化意图分类 |
 | `INTENT_CLASSIFIER_API_KEY` | 可选 classifier key；`doctor` 和 config 输出会脱敏 |
 | `INTENT_CLASSIFIER_MODEL` | classifier 模型名 |
 | `INTENT_ROUTER_TIMEOUT_SECONDS` | 可选远程路由调用超时，默认 `8` |
 
-默认 `hybrid` 是 fail-open：embeddings 或 classifier 没配置、超时或失败时，会在 `degraded_reason` 里说明，然后自动退回本地规则。classifier 可以补充 capability，但未知 capability 和 provider 名会被忽略；provider 仍然只能由 capability-first 注册表选择。
+默认 `hybrid` 是 fail-open：embeddings 或 classifier 没配置、超时或失败时，会在 `degraded_reason` 里说明，然后自动退回本地规则。语义路由只有在 top1 相似度达到 `INTENT_EMBEDDING_THRESHOLD`，并且 top1 与第二名差值达到 `INTENT_EMBEDDING_MARGIN` 时，才会直接添加 capability；否则只记录 ambiguous 信号。classifier 可以补充 capability，但未知 capability 和 provider 名会被忽略；provider 仍然只能由 capability-first 注册表选择。
+
+普通用户推荐直接使用 Qwen3-Embedding-8B preset：`INTENT_EMBEDDING_API_URL=https://api.siliconflow.cn/v1/embeddings`、`INTENT_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B`、`INTENT_EMBEDDING_THRESHOLD=0.475`、`INTENT_EMBEDDING_MARGIN=0.053`。选择 8B 模型且没有手动配置 threshold/margin 时，`smart-search setup` 会自动补齐这两个推荐值。
+
+embedding 余弦分数强依赖模型。`route-calibrate` 保留给高级复验：换 `INTENT_EMBEDDING_MODEL`、换 embedding endpoint，或者后续加入真实 query 校准集后再运行：
+
+```powershell
+smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format markdown
+```
+
+再按报告推荐值设置 `INTENT_EMBEDDING_THRESHOLD` 和 `INTENT_EMBEDDING_MARGIN`。校准主指标是 semantic-only Macro-F1；full-route Macro-F1 只用来验证 rules/classifier 兜底后的真实路由表现。
 
 几个容易混淆的点：
 
@@ -294,7 +306,7 @@ smart-search deep "https://example.com/source" --format json
 - `TAVILY_API_URL` 只影响 Tavily，不会代理智谱。Tavily Hikari / 号池用 `https://<host>/api/tavily`；setup 会把根域名或 `/mcp` 输入规范化成这个 REST base。
 - `FIRECRAWL_API_URL` 默认是 `https://api.firecrawl.dev/v2`。
 - AnySearch 默认走 `https://api.anysearch.com/mcp` 的 JSON-RPC 2.0 `tools/call`。没有 key 时允许匿名请求；有 key 时发送 `Authorization: Bearer ...`。HTTP 200 但 `result.isError=true` 会按 provider error 处理，不能当成功证据。
-- `doctor` 会报告 intent router 的配置状态、模型名、超时和是否可降级，不会暴露 router API key。
+- `doctor` 和 `route` 会报告 intent router 的配置状态、embedding 模型、threshold、margin、配置来源、超时和是否可降级，不会暴露 router API key。
 
 非交互配置示例：
 
@@ -309,6 +321,12 @@ smart-search setup --non-interactive `
   --validation-level "balanced" `
   --fallback-mode "auto" `
   --minimum-profile "standard" `
+  --intent-router "hybrid" `
+  --intent-embedding-api-url "https://api.siliconflow.cn/v1/embeddings" `
+  --intent-embedding-api-key "your-siliconflow-key" `
+  --intent-embedding-model "Qwen/Qwen3-Embedding-8B" `
+  --intent-embedding-threshold "0.475" `
+  --intent-embedding-margin "0.053" `
   --exa-key "your-exa-key" `
   --context7-key "your-context7-key" `
   --zhipu-key "your-zhipu-key" `
@@ -368,6 +386,8 @@ smart-search anysearch-batch "AAPL" "RAG papers" --max-results 2 --format json
 | `INTENT_EMBEDDING_API_URL` | 可选 embeddings endpoint，用于语义路由 |
 | `INTENT_EMBEDDING_API_KEY` | 可选 embeddings key |
 | `INTENT_EMBEDDING_MODEL` | embeddings 模型名 |
+| `INTENT_EMBEDDING_THRESHOLD` | 语义路由阈值，默认 `0.74`，换模型后用 `route-calibrate` 校准 |
+| `INTENT_EMBEDDING_MARGIN` | top1 与第二名分数差阈值，默认 `0.05` |
 | `INTENT_CLASSIFIER_API_URL` | 可选 classifier chat-completions endpoint |
 | `INTENT_CLASSIFIER_API_KEY` | 可选 classifier key |
 | `INTENT_CLASSIFIER_MODEL` | classifier 模型名 |
@@ -421,6 +441,7 @@ smart-search anysearch-batch "AAPL" "RAG papers" --max-results 2 --format json
 | `anysearch-batch` | `as-batch` | 实验 AnySearch 批量搜索，最多 5 条 |
 | `context7-library` | `c7`、`ctx7` | 查 Context7 库候选 |
 | `context7-docs` | `c7d`、`c7docs`、`ctx7-docs` | 抓 Context7 文档 |
+| `route-calibrate` | `route-cal`、`rcal` | 评测 embedding 路由模型并推荐 threshold/margin |
 | `doctor` | `d` | 配置和连通性检查 |
 | `setup` | `init` | 配置向导 |
 | `config` | `cfg` | 本机配置读写 |
@@ -433,6 +454,7 @@ smart-search anysearch-batch "AAPL" "RAG papers" --max-results 2 --format json
 ```powershell
 smart-search search "query" --validation balanced --extra-sources 3 --timeout 90 --format json --output result.json
 smart-search route "React useEffect API docs" --format markdown
+smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format markdown
 smart-search research "query" --budget deep --fallback auto --format json --output research.json
 smart-search search "query" --stream --format json
 smart-search search "query" --no-stream --format json

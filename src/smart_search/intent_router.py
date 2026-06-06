@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from .embedding_presets import embedding_preset_for_model, embedding_threshold_commands
+
 
 ALLOWED_INTENT_ROUTER_MODES = {"hybrid", "rules", "off"}
 ROUTABLE_CAPABILITIES = {"docs_search", "web_search", "web_fetch", "vertical_search"}
@@ -157,7 +159,129 @@ CAPABILITY_UTTERANCES: dict[str, list[str]] = {
     ],
 }
 
-SEMANTIC_CONFIDENCE_THRESHOLD = 0.74
+DEFAULT_ROUTE_CALIBRATION_MODELS = [
+    "Qwen/Qwen3-Embedding-8B",
+    "Qwen/Qwen3-Embedding-4B",
+    "Qwen/Qwen3-Embedding-0.6B",
+    "Pro/BAAI/bge-m3",
+    "BAAI/bge-large-zh-v1.5",
+]
+
+ROUTE_CALIBRATION_QUERIES: dict[str, list[str]] = {
+    "docs_search": [
+        "React useEffect official docs",
+        "Next.js app router caching docs",
+        "Python pathlib Path API reference",
+        "TypeScript compiler options documentation",
+        "LangChain retriever integration guide",
+        "OpenAI Responses API parameters",
+        "Prisma migration CLI docs",
+        "Vue watchEffect API usage",
+        "FastAPI dependency injection docs",
+        "Docker compose healthcheck reference",
+        "这个 SDK 怎么接入",
+        "查一下 React hooks 官方文档",
+        "Python requests 超时参数怎么配置",
+        "Vite 配置 alias 的文档",
+        "Context7 怎么查 LangChain 文档",
+        "OpenAI embeddings API 文档",
+        "Next.js middleware 配置项",
+        "Rust tokio select 文档",
+        "Pandas groupby 参数说明",
+        "Tailwind CSS container query docs",
+    ],
+    "web_search": [
+        "今天国内 AI 新闻",
+        "latest Nvidia earnings news",
+        "current Bitcoin price movement",
+        "今日人民币汇率变化",
+        "NBA score today Lakers",
+        "本周新能源车政策",
+        "recent OpenAI product announcement",
+        "latest Windows 11 update issue",
+        "现在上海天气预警",
+        "today stock market close summary",
+        "刚刚苹果发布会消息",
+        "最近美国大选民调",
+        "current oil price news",
+        "今日A股收盘行情",
+        "latest CVE exploit in the wild",
+        "本月中国芯片政策变化",
+        "today SpaceX launch status",
+        "latest Python release announcement",
+        "近期比特币ETF新闻",
+        "NBA今日赛程",
+    ],
+    "web_fetch": [
+        "summarize https://example.com",
+        "fetch this PDF https://example.com/report.pdf",
+        "请读取这个网页 https://example.com/post",
+        "核验这个链接里的说法 https://example.com/source",
+        "extract the main text from https://example.org/article",
+        "read this arxiv PDF https://arxiv.org/pdf/2401.00001.pdf",
+        "抓取 https://example.com/docs 的正文",
+        "summarize this url: http://example.net/page",
+        "请打开链接看看写了什么 https://example.com",
+        "compare the claim in https://example.com/claim",
+        "pull metadata from https://example.com/product",
+        "读取这篇博客 https://blog.example.com/a",
+        "fetch known URL content https://news.example.com/item",
+        "把这个PDF概括一下 https://example.com/file.pdf",
+        "verify source page http://example.org/source",
+        "get text from URL https://developer.example.com/changelog",
+        "read webpage content at https://example.edu/paper",
+        "请提取网页正文 https://docs.example.com/install",
+        "summarize linked announcement https://company.example.com/news",
+        "fetch this public page https://example.com/about",
+    ],
+    "vertical_search": [
+        "CVE-2026 OpenSSL vulnerability impact",
+        "Search GitHub codebase for auth middleware",
+        "legal regulation database search GDPR",
+        "financial filing structured search 10-K revenue",
+        "academic paper search transformer retrieval",
+        "漏洞影响范围 CVE-2025",
+        "查找 GitHub 仓库里的配置文件",
+        "法规条文数据库检索",
+        "股票财报结构化查询",
+        "医学论文数据库检索",
+        "patent search battery materials",
+        "code search repo function name",
+        "SEC filing risk factors search",
+        "法律案例检索 合同纠纷",
+        "学术论文 引用 网络 搜索",
+        "NVD vulnerability database query",
+        "vertical domain search for finance filings",
+        "repository search for Dockerfile examples",
+        "法律法规 检索 个税",
+        "数据库里查 CVE exploit score",
+    ],
+    "none": [
+        "帮我把这句话翻译成英文",
+        "写一封请假邮件",
+        "总结下面这段文字",
+        "解释这个错误堆栈的含义",
+        "帮我给变量起名",
+        "把这段 JSON 格式化",
+        "生成一个会议纪要模板",
+        "用更礼貌的语气改写这句话",
+        "给我一个早餐计划",
+        "计算 37 乘以 19",
+        "explain what recursion means in simple words",
+        "write a short haiku about winter",
+        "classify these TODO items by priority",
+        "make this paragraph shorter",
+        "帮我润色项目介绍",
+        "不联网也能回答的常识问题",
+        "给代码加一点注释",
+        "Python 函数是什么意思，用自己的话解释",
+        "React 是什么，用中文解释",
+        "帮我检查语法和错别字",
+    ],
+}
+
+DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD = 0.74
+DEFAULT_SEMANTIC_CONFIDENCE_MARGIN = 0.05
 
 
 @dataclass
@@ -312,6 +436,77 @@ def _classifier_can_add_capability(capability: str, rules: IntentRouteResult) ->
     )
 
 
+def _semantic_summary(scores: dict[str, float], threshold: float, margin: float) -> dict[str, Any]:
+    candidates = [(capability, float(score)) for capability, score in scores.items() if capability in ROUTABLE_CAPABILITIES]
+    ranked = sorted(candidates, key=lambda item: item[1], reverse=True)
+    top_capability = ranked[0][0] if ranked else ""
+    top_score = ranked[0][1] if ranked else 0.0
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+    score_margin = top_score - second_score if ranked else 0.0
+    return {
+        "top_capability": top_capability,
+        "top_score": top_score,
+        "second_score": second_score,
+        "margin": score_margin,
+        "threshold": threshold,
+        "minimum_margin": margin,
+        "passed_threshold": bool(top_capability and top_score >= threshold),
+        "passed_margin": bool(top_capability and score_margin >= margin),
+    }
+
+
+def _config_source(cfg: Any, key: str) -> str:
+    getter = getattr(cfg, "get_config_source", None)
+    if callable(getter):
+        return str(getter(key))
+    return "default"
+
+
+def _matches_float_text(value: float, expected: str) -> bool:
+    try:
+        return abs(float(value) - float(expected)) < 0.0005
+    except (TypeError, ValueError):
+        return False
+
+
+def _embedding_preset_recommendation(
+    model: str,
+    threshold: float,
+    margin: float,
+    threshold_source: str,
+    margin_source: str,
+) -> dict[str, Any]:
+    preset = embedding_preset_for_model(model)
+    if not preset:
+        return {}
+    threshold_matches = _matches_float_text(threshold, preset.threshold)
+    margin_matches = _matches_float_text(margin, preset.margin)
+    missing_or_mismatched = (
+        threshold_source == "default"
+        or margin_source == "default"
+        or not threshold_matches
+        or not margin_matches
+    )
+    message = ""
+    if missing_or_mismatched:
+        message = (
+            f"{preset.model} works best with INTENT_EMBEDDING_THRESHOLD={preset.threshold} "
+            f"and INTENT_EMBEDDING_MARGIN={preset.margin} based on the current Smart Search calibration set."
+        )
+    return {
+        "embedding_preset_id": preset.preset_id,
+        "embedding_preset_model": preset.model,
+        "embedding_preset_api_url": preset.api_url,
+        "embedding_preset_threshold": preset.threshold,
+        "embedding_preset_margin": preset.margin,
+        "embedding_preset_threshold_matches": threshold_matches,
+        "embedding_preset_margin_matches": margin_matches,
+        "embedding_preset_recommended": missing_or_mismatched,
+        "embedding_preset_recommendation": message,
+        "embedding_preset_commands": embedding_threshold_commands(preset) if missing_or_mismatched else [],
+    }
+
+
 class IntentRouter:
     def __init__(self, cfg: Any):
         self.config = cfg
@@ -328,16 +523,41 @@ class IntentRouter:
         except ValueError as exc:
             timeout_seconds = 8.0
             errors.append(str(exc))
+        try:
+            embedding_threshold = self.config.intent_embedding_threshold
+        except ValueError as exc:
+            embedding_threshold = DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD
+            errors.append(str(exc))
+        try:
+            embedding_margin = self.config.intent_embedding_margin
+        except ValueError as exc:
+            embedding_margin = DEFAULT_SEMANTIC_CONFIDENCE_MARGIN
+            errors.append(str(exc))
+        embedding_model = self.config.intent_embedding_model or ""
+        threshold_source = _config_source(self.config, "INTENT_EMBEDDING_THRESHOLD")
+        margin_source = _config_source(self.config, "INTENT_EMBEDDING_MARGIN")
+        preset_recommendation = _embedding_preset_recommendation(
+            embedding_model,
+            embedding_threshold,
+            embedding_margin,
+            threshold_source,
+            margin_source,
+        )
         return {
             "mode": mode,
             "ok": not errors,
             "error": "; ".join(errors),
             "embeddings_configured": self._embeddings_configured(),
             "classifier_configured": self._classifier_configured(),
-            "embedding_model": self.config.intent_embedding_model or "",
+            "embedding_model": embedding_model,
+            "embedding_threshold": embedding_threshold,
+            "embedding_margin": embedding_margin,
+            "embedding_threshold_source": threshold_source,
+            "embedding_margin_source": margin_source,
             "classifier_model": self.config.intent_classifier_model or "",
             "timeout_seconds": timeout_seconds,
             "degrades_to_rules": True,
+            **preset_recommendation,
         }
 
     async def route(
@@ -383,13 +603,40 @@ class IntentRouter:
             try:
                 semantic = await self._semantic_route(query)
                 engines.append("embeddings")
+                scores = semantic.get("scores") if isinstance(semantic.get("scores"), dict) else {}
+                summary = _semantic_summary(
+                    {capability: float(score) for capability, score in scores.items()},
+                    self.config.intent_embedding_threshold,
+                    self.config.intent_embedding_margin,
+                )
                 for capability, score in (semantic.get("scores") or {}).items():
                     if capability in ROUTABLE_CAPABILITIES:
                         merged_signals[f"semantic_{capability}_score"] = round(float(score), 3)
-                    if capability in ROUTABLE_CAPABILITIES and float(score) >= SEMANTIC_CONFIDENCE_THRESHOLD:
-                        merged_caps.add(capability)
-                        merged_reasons.append(f"embeddings matched {capability} examples")
-                        confidence = max(confidence, float(score))
+                merged_signals.update(
+                    {
+                        "semantic_top_capability": summary["top_capability"],
+                        "semantic_top_score": round(float(summary["top_score"]), 3),
+                        "semantic_second_score": round(float(summary["second_score"]), 3),
+                        "semantic_margin": round(float(summary["margin"]), 3),
+                        "semantic_threshold": round(float(summary["threshold"]), 3),
+                        "semantic_minimum_margin": round(float(summary["minimum_margin"]), 3),
+                        "semantic_passed_threshold": bool(summary["passed_threshold"]),
+                        "semantic_passed_margin": bool(summary["passed_margin"]),
+                    }
+                )
+                if summary["passed_threshold"] and summary["passed_margin"]:
+                    capability = str(summary["top_capability"])
+                    merged_caps.add(capability)
+                    merged_reasons.append(
+                        f"embeddings matched {capability} examples "
+                        f"(score {summary['top_score']:.3f}, margin {summary['margin']:.3f})"
+                    )
+                    confidence = max(confidence, float(summary["top_score"]))
+                elif summary["passed_threshold"] and not summary["passed_margin"]:
+                    merged_reasons.append(
+                        "embeddings ambiguous: top semantic score passed threshold "
+                        f"but margin {summary['margin']:.3f} was below {summary['minimum_margin']:.3f}"
+                    )
             except Exception as exc:
                 degraded_reasons.append(f"embeddings unavailable: {exc}")
         else:
@@ -468,7 +715,14 @@ class IntentRouter:
         for index, (capability, _example) in enumerate(utterances, start=1):
             score = _cosine_similarity(query_embedding, embeddings[index])
             scores[capability] = max(scores.get(capability, 0.0), score)
-        return {"scores": scores}
+        return {
+            "scores": scores,
+            **_semantic_summary(
+                scores,
+                self.config.intent_embedding_threshold,
+                self.config.intent_embedding_margin,
+            ),
+        }
 
     async def _embed(self, inputs: list[str]) -> list[list[float]]:
         headers = {

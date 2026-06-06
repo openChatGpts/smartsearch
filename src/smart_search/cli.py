@@ -11,6 +11,10 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from . import service
+from .embedding_presets import (
+    QWEN3_EMBEDDING_8B_PRESET,
+    embedding_preset_for_model,
+)
 from .skill_installer import (
     DEFAULT_SKILL_TARGET_IDS,
     SKILL_TARGETS,
@@ -48,6 +52,7 @@ COMMAND_ALIASES = {
     "context7-docs": ["c7d", "c7docs", "ctx7-docs"],
     "deep": ["dr"],
     "research": ["rs"],
+    "route-calibrate": ["route-cal", "rcal"],
     "smoke": ["sm"],
     "doctor": ["d"],
     "diagnose": ["diag"],
@@ -475,12 +480,25 @@ def _format_doctor_markdown(data: dict[str, Any]) -> str:
                     ["embeddings_configured", _yes_no(router.get("embeddings_configured"))],
                     ["classifier_configured", _yes_no(router.get("classifier_configured"))],
                     ["embedding_model", router.get("embedding_model", "")],
+                    ["embedding_threshold", router.get("embedding_threshold", "")],
+                    ["embedding_margin", router.get("embedding_margin", "")],
+                    ["embedding_threshold_source", router.get("embedding_threshold_source", "")],
+                    ["embedding_margin_source", router.get("embedding_margin_source", "")],
+                    ["embedding_preset", router.get("embedding_preset_id", "")],
+                    ["embedding_preset_threshold", router.get("embedding_preset_threshold", "")],
+                    ["embedding_preset_margin", router.get("embedding_preset_margin", "")],
+                    ["embedding_preset_recommended", _yes_no(router.get("embedding_preset_recommended"))],
                     ["classifier_model", router.get("classifier_model", "")],
                     ["timeout_seconds", router.get("timeout_seconds", "")],
                     ["degrades_to_rules", _yes_no(router.get("degrades_to_rules"))],
                 ],
             )
         )
+        if router.get("embedding_preset_recommendation"):
+            lines.extend(["", "### Embedding Preset Recommendation", "", router.get("embedding_preset_recommendation")])
+            commands = router.get("embedding_preset_commands") or []
+            if commands:
+                lines.extend(_markdown_code_block("\n".join(str(command) for command in commands)))
         if router.get("error"):
             lines.append(f"Intent router error: {router.get('error')}")
 
@@ -609,8 +627,16 @@ def _format_route_markdown(data: dict[str, Any]) -> str:
         f"Required capabilities: `{', '.join(data.get('required_capabilities') or [])}`",
         f"Confidence: `{data.get('confidence', '')}`",
         f"Engines: `{', '.join(data.get('router_engines_used') or [])}`",
+        f"Embedding model: `{data.get('embedding_model', '')}`",
+        f"Embedding threshold: `{data.get('embedding_threshold', '')}` ({data.get('embedding_threshold_source', '')})",
+        f"Embedding margin: `{data.get('embedding_margin', '')}` ({data.get('embedding_margin_source', '')})",
         f"Degraded: {_yes_no(data.get('degraded'))}",
     ]
+    if data.get("embedding_preset_recommendation"):
+        lines.extend(["", "## Embedding Preset Recommendation", "", data.get("embedding_preset_recommendation")])
+        commands = data.get("embedding_preset_commands") or []
+        if commands:
+            lines.extend(_markdown_code_block("\n".join(str(command) for command in commands)))
     if data.get("degraded_reason"):
         lines.append(f"Degraded reason: {data.get('degraded_reason')}")
     reasons = data.get("reasons") or []
@@ -623,6 +649,69 @@ def _format_route_markdown(data: dict[str, Any]) -> str:
         rows = [[key, value] for key, value in sorted(signals.items())]
         lines.extend(["", "## Signals"])
         lines.extend(_markdown_table(["Signal", "Value"], rows))
+    lines.extend(_error_lines(data))
+    return "\n".join(lines).strip() + "\n"
+
+
+def _format_route_calibrate_markdown(data: dict[str, Any]) -> str:
+    lines = [
+        "# Route Calibration",
+        "",
+        f"Status: {_status_label(data.get('ok'))}",
+        f"Primary metric: `{data.get('primary_metric', data.get('metric', ''))}`",
+        f"Dataset size: `{data.get('dataset_size', '')}`",
+        f"Recommended model: `{data.get('recommended_model') or '-'}`",
+        f"Recommended threshold: `{data.get('recommended_threshold') if data.get('recommended_threshold') is not None else '-'}`",
+        f"Recommended margin: `{data.get('recommended_margin') if data.get('recommended_margin') is not None else '-'}`",
+    ]
+    results = data.get("model_results") or []
+    if results:
+        rows = []
+        for item in results:
+            rows.append(
+                [
+                    item.get("model", ""),
+                    _status_label(item.get("ok")),
+                    item.get("dimension", ""),
+                    _latency_text(item.get("latency_ms")),
+                    item.get("semantic_macro_f1", ""),
+                    item.get("full_route_macro_f1", ""),
+                    item.get("recommended_threshold", ""),
+                    item.get("recommended_margin", ""),
+                    item.get("error", ""),
+                ]
+            )
+        lines.extend(["", "## Models"])
+        lines.extend(
+            _markdown_table(
+                ["Model", "Status", "Dim", "Latency", "Semantic F1", "Full-route F1", "Threshold", "Margin", "Error"],
+                rows,
+            )
+        )
+    failed = data.get("failed_models") or []
+    if failed:
+        lines.extend(["", "## Failed Models"])
+        for model in failed:
+            lines.append(f"- `{model}`")
+    best = next((item for item in results if item.get("model") == data.get("recommended_model")), None)
+    if isinstance(best, dict):
+        failures = best.get("semantic_failures") or []
+        if failures:
+            lines.extend(["", "## Representative Semantic Failures"])
+            rows = []
+            for failure in failures[:8]:
+                rows.append(
+                    [
+                        failure.get("id", ""),
+                        failure.get("expected", ""),
+                        failure.get("predicted", ""),
+                        failure.get("top_capability", ""),
+                        failure.get("top_score", ""),
+                        failure.get("margin", ""),
+                        failure.get("query", ""),
+                    ]
+                )
+            lines.extend(_markdown_table(["Case", "Expected", "Predicted", "Top", "Score", "Margin", "Query"], rows))
     lines.extend(_error_lines(data))
     return "\n".join(lines).strip() + "\n"
 
@@ -820,6 +909,8 @@ def _format_markdown(command: str, data: dict[str, Any]) -> str:
         return "\n".join(lines).strip() + "\n"
     if command == "route":
         return _format_route_markdown(data)
+    if command == "route-calibrate":
+        return _format_route_calibrate_markdown(data)
     if command == "research":
         lines = [
             "# Research Report",
@@ -919,9 +1010,35 @@ def _format_content(command: str, data: dict[str, Any]) -> str:
         lines = [
             f"Intent route {_status_label(data.get('ok'))}: capabilities={capabilities}",
             f"mode={data.get('intent_router_mode', '')}; confidence={data.get('confidence', '')}; engines={','.join(data.get('router_engines_used') or [])}",
+            f"embedding_model={data.get('embedding_model', '')}; threshold={data.get('embedding_threshold', '')}({data.get('embedding_threshold_source', '')}); margin={data.get('embedding_margin', '')}({data.get('embedding_margin_source', '')})",
         ]
+        if data.get("embedding_preset_recommendation"):
+            lines.append(
+                "embedding_preset_recommendation="
+                f"threshold={data.get('embedding_preset_threshold')} "
+                f"margin={data.get('embedding_preset_margin')}"
+            )
         if data.get("degraded_reason"):
             lines.append(f"degraded={data.get('degraded_reason')}")
+        if data.get("error"):
+            lines.append(f"Error: {_error_summary(data)}")
+        return "\n".join(lines).strip() + "\n"
+    if command == "route-calibrate":
+        results = data.get("model_results") or []
+        ok_count = sum(1 for item in results if item.get("ok"))
+        lines = [
+            f"Route calibration {_status_label(data.get('ok'))}: {ok_count}/{len(results)} models calibrated",
+            f"primary_metric={data.get('primary_metric', data.get('metric', ''))}; dataset={data.get('dataset_size', '')}",
+        ]
+        if data.get("recommended_model"):
+            lines.append(
+                "recommended="
+                f"{data.get('recommended_model')} "
+                f"threshold={data.get('recommended_threshold')} "
+                f"margin={data.get('recommended_margin')}"
+            )
+        if data.get("failed_models"):
+            lines.append("failed=" + ",".join(str(item) for item in data.get("failed_models") or []))
         if data.get("error"):
             lines.append(f"Error: {_error_summary(data)}")
         return "\n".join(lines).strip() + "\n"
@@ -943,6 +1060,13 @@ def _format_content(command: str, data: dict[str, Any]) -> str:
         ]
         if capability_bits:
             lines.append("Capabilities: " + ", ".join(capability_bits))
+        router = data.get("intent_router_status") or {}
+        if router.get("embedding_preset_recommendation"):
+            lines.append(
+                "Embedding preset recommendation: "
+                f"threshold={router.get('embedding_preset_threshold')} "
+                f"margin={router.get('embedding_preset_margin')}"
+            )
         if data.get("error"):
             lines.append(f"Error: {_error_summary(data)}")
         return "\n".join(lines).strip() + "\n"
@@ -1099,6 +1223,8 @@ def _exit_code(data: dict[str, Any]) -> int:
         return EXIT_PARAMETER_ERROR
     if error_type == "network_error":
         return EXIT_NETWORK_ERROR
+    if error_type == "provider_error":
+        return EXIT_NETWORK_ERROR
     if error_type == "evidence_error":
         return EXIT_NETWORK_ERROR
     return EXIT_RUNTIME_ERROR
@@ -1200,6 +1326,98 @@ def _normalize_zhipu_api_url(url: str) -> str:
 
 def _normalize_jina_reader_api_url(url: str) -> str:
     return _normalize_custom_base_url(url)
+
+
+def _config_value_source(key: str) -> str:
+    getter = getattr(service.config, "get_config_source", None)
+    if callable(getter):
+        return str(getter(key))
+    return "default"
+
+
+def _current_config_value(key: str, current: dict[str, str]) -> str:
+    value = str(current.get(key, "") or "")
+    if value:
+        return value
+    if key == "INTENT_EMBEDDING_API_URL":
+        return str(getattr(service.config, "intent_embedding_api_url", "") or "")
+    if key == "INTENT_EMBEDDING_THRESHOLD":
+        try:
+            return str(getattr(service.config, "intent_embedding_threshold", "") or "")
+        except ValueError:
+            return ""
+    if key == "INTENT_EMBEDDING_MARGIN":
+        try:
+            return str(getattr(service.config, "intent_embedding_margin", "") or "")
+        except ValueError:
+            return ""
+    return ""
+
+
+def _matches_float_text(value: str, expected: str) -> bool:
+    try:
+        return abs(float(str(value).strip()) - float(expected)) < 0.0005
+    except (TypeError, ValueError):
+        return False
+
+
+def _apply_embedding_setup_preset(
+    values: dict[str, str],
+    current: dict[str, str],
+    *,
+    interactive: bool,
+    lang: str,
+) -> list[str]:
+    warnings: list[str] = []
+    merged = _merge_setup_values(current, values)
+    model = merged.get("INTENT_EMBEDDING_MODEL", "")
+    preset = embedding_preset_for_model(model)
+    if not preset:
+        return warnings
+
+    for key, preset_value in (
+        ("INTENT_EMBEDDING_API_URL", preset.api_url),
+        ("INTENT_EMBEDDING_THRESHOLD", preset.threshold),
+        ("INTENT_EMBEDDING_MARGIN", preset.margin),
+    ):
+        if values.get(key):
+            continue
+        source = _config_value_source(key)
+        current_value = _current_config_value(key, current)
+        if source == "default" or not current_value:
+            values[key] = preset_value
+            continue
+        if key == "INTENT_EMBEDDING_API_URL":
+            matches = current_value.rstrip("/") == preset_value
+        else:
+            matches = _matches_float_text(current_value, preset_value)
+        if not matches:
+            warning = (
+                f"{key} is currently {current_value}; recommended for {preset.model} is {preset_value}."
+            )
+            warnings.append(warning)
+            if interactive:
+                _write_stderr(
+                    _t(
+                        lang,
+                        f"提示: {warning}\n",
+                        f"Note: {warning}\n",
+                    )
+                )
+    return warnings
+
+
+def _has_embedding_setup_values(values: dict[str, str]) -> bool:
+    return any(
+        bool(values.get(key))
+        for key in (
+            "INTENT_EMBEDDING_API_URL",
+            "INTENT_EMBEDDING_API_KEY",
+            "INTENT_EMBEDDING_MODEL",
+            "INTENT_EMBEDDING_THRESHOLD",
+            "INTENT_EMBEDDING_MARGIN",
+        )
+    )
 
 
 def _is_tavily_hikari_key(api_key: str) -> bool:
@@ -1871,6 +2089,8 @@ def _has_intent_router_config(values: dict[str, str]) -> bool:
         "INTENT_EMBEDDING_API_URL",
         "INTENT_EMBEDDING_API_KEY",
         "INTENT_EMBEDDING_MODEL",
+        "INTENT_EMBEDDING_THRESHOLD",
+        "INTENT_EMBEDDING_MARGIN",
         "INTENT_CLASSIFIER_API_URL",
         "INTENT_CLASSIFIER_API_KEY",
         "INTENT_CLASSIFIER_MODEL",
@@ -1915,12 +2135,19 @@ def _prompt_intent_router(values: dict[str, str], current: dict[str, str], lang:
         _t(lang, "配置 embeddings 语义路由?", "Configure embeddings semantic routing?"),
         default=bool(merged.get("INTENT_EMBEDDING_API_URL") or merged.get("INTENT_EMBEDDING_API_KEY") or merged.get("INTENT_EMBEDDING_MODEL")),
     ):
+        _write_stderr(
+            _t(
+                lang,
+                "推荐 preset: SiliconFlow + Qwen/Qwen3-Embedding-8B；setup 会自动使用 threshold=0.475、margin=0.053。\n",
+                "Recommended preset: SiliconFlow + Qwen/Qwen3-Embedding-8B; setup will use threshold=0.475 and margin=0.053 automatically.\n",
+            )
+        )
         raw_url = _prompt_value(
             "INTENT_EMBEDDING_API_URL",
             _t(
                 lang,
-                "Embeddings API 地址（示例: https://api.openai.com/v1/embeddings）",
-                "Embeddings API URL (example: https://api.openai.com/v1/embeddings)",
+                f"Embeddings API 地址（推荐: {QWEN3_EMBEDDING_8B_PRESET.api_url}）",
+                f"Embeddings API URL (recommended: {QWEN3_EMBEDDING_8B_PRESET.api_url})",
             ),
             current.get("INTENT_EMBEDDING_API_URL", ""),
             optional=True,
@@ -1936,8 +2163,8 @@ def _prompt_intent_router(values: dict[str, str], current: dict[str, str], lang:
         )
         values["INTENT_EMBEDDING_MODEL"] = _prompt_value(
             "INTENT_EMBEDDING_MODEL",
-            _t(lang, "Embeddings 模型", "Embeddings model"),
-            current.get("INTENT_EMBEDDING_MODEL", ""),
+            _t(lang, "Embeddings 模型（推荐: Qwen/Qwen3-Embedding-8B）", "Embeddings model (recommended: Qwen/Qwen3-Embedding-8B)"),
+            current.get("INTENT_EMBEDDING_MODEL", "") or QWEN3_EMBEDDING_8B_PRESET.model,
             optional=True,
             lang=lang,
         )
@@ -2000,11 +2227,13 @@ def _write_setup_examples(lang: str) -> None:
             "  main_search: xAI Responses，或 OpenAI-compatible（示例: https://api.openai.com/v1）\n"
             "  docs_search: 文档/API 优先 Context7；官方域名、论文和低噪声发现再配 Exa。\n"
             "  web_fetch: Tavily 官方地址是 https://api.tavily.com；号池填 https://<host>/api/tavily。\n"
+            "  intent embeddings: 推荐 SiliconFlow + Qwen/Qwen3-Embedding-8B，setup 会自动补 threshold=0.475、margin=0.053。\n"
             "  key 都填你自己控制台里的；Zhipu / Firecrawl 可以之后再补。\n",
             "\nIf unsure: first configure main_search + docs_search + web_fetch.\n"
             "  main_search: xAI Responses, or OpenAI-compatible (example: https://api.openai.com/v1)\n"
             "  docs_search: Context7 for docs/API first; add Exa for official domains, papers, and low-noise discovery.\n"
             "  web_fetch: official Tavily endpoint is https://api.tavily.com; pooled endpoints use https://<host>/api/tavily.\n"
+            "  intent embeddings: recommended SiliconFlow + Qwen/Qwen3-Embedding-8B; setup auto-fills threshold=0.475 and margin=0.053.\n"
             "  Use keys from your own provider consoles. Zhipu / Firecrawl can be added later.\n",
         )
     )
@@ -2082,6 +2311,8 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("INTENT_EMBEDDING_API_URL", "Intent embedding API URL", True),
         ("INTENT_EMBEDDING_API_KEY", "Intent embedding API key", True),
         ("INTENT_EMBEDDING_MODEL", "Intent embedding model", True),
+        ("INTENT_EMBEDDING_THRESHOLD", "Intent embedding threshold (0-1)", True),
+        ("INTENT_EMBEDDING_MARGIN", "Intent embedding margin (0-1)", True),
         ("INTENT_CLASSIFIER_API_URL", "Intent classifier API URL", True),
         ("INTENT_CLASSIFIER_API_KEY", "Intent classifier API key", True),
         ("INTENT_CLASSIFIER_MODEL", "Intent classifier model", True),
@@ -2149,6 +2380,9 @@ async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "route":
         data = await service.route(args.query, validation=args.validation, mode=args.router_mode)
         return _print_result("route", data, args.format, args.output)
+    if args.command == "route-calibrate":
+        data = await service.route_calibrate(models=args.models)
+        return _print_result("route-calibrate", data, args.format, args.output)
     if args.command == "fetch":
         data = await service.fetch(args.url)
         return _print_result("fetch", data, args.format, args.output)
@@ -2341,6 +2575,8 @@ def _run_setup(args: argparse.Namespace) -> int:
         "INTENT_EMBEDDING_API_URL": _normalize_custom_base_url(args.intent_embedding_api_url),
         "INTENT_EMBEDDING_API_KEY": args.intent_embedding_api_key,
         "INTENT_EMBEDDING_MODEL": args.intent_embedding_model,
+        "INTENT_EMBEDDING_THRESHOLD": args.intent_embedding_threshold,
+        "INTENT_EMBEDDING_MARGIN": args.intent_embedding_margin,
         "INTENT_CLASSIFIER_API_URL": _normalize_custom_base_url(args.intent_classifier_api_url),
         "INTENT_CLASSIFIER_API_KEY": args.intent_classifier_api_key,
         "INTENT_CLASSIFIER_MODEL": args.intent_classifier_model,
@@ -2370,16 +2606,24 @@ def _run_setup(args: argparse.Namespace) -> int:
 
     lang = args.lang if args.lang in {"zh", "en"} else "zh"
     selected_skill_targets: list[str] = list(explicit_skill_targets)
+    setup_warnings: list[str] = []
+    current_for_setup: dict[str, str] = {}
 
     if not args.non_interactive:
-        current = service.config_list(show_secrets=True)["values"]
+        current_for_setup = service.config_list(show_secrets=True)["values"]
         _write_setup_banner(args.lang if args.lang in {"zh", "en"} else "zh")
         lang = _select_setup_language(args.lang)
         if args.advanced:
-            _run_advanced_setup_prompts(values, current, lang)
+            _run_advanced_setup_prompts(values, current_for_setup, lang)
         else:
             skill_targets_for_prompt = selected_skill_targets if not args.skip_skills and not selected_skill_targets else None
-            _run_guided_setup_prompts(values, current, lang, skill_targets=skill_targets_for_prompt, show_banner=False)
+            _run_guided_setup_prompts(values, current_for_setup, lang, skill_targets=skill_targets_for_prompt, show_banner=False)
+        if _has_embedding_setup_values(values):
+            setup_warnings.extend(_apply_embedding_setup_preset(values, current_for_setup, interactive=True, lang=lang))
+    else:
+        current_for_setup = service.config_list(show_secrets=True)["values"]
+        if _has_embedding_setup_values(values):
+            setup_warnings.extend(_apply_embedding_setup_preset(values, current_for_setup, interactive=False, lang=lang))
 
     saved: dict[str, str] = {}
     for key, value in values.items():
@@ -2393,6 +2637,8 @@ def _run_setup(args: argparse.Namespace) -> int:
 
     ok = True if skill_result is None else bool(skill_result.get("ok", False))
     data = {"ok": ok, "config_file": service.config_path()["config_file"], "saved": saved}
+    if setup_warnings:
+        data["warnings"] = setup_warnings
     if skill_result is not None:
         data["skills"] = skill_result
         if not skill_result.get("ok", False):
@@ -2492,6 +2738,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override SMART_SEARCH_INTENT_ROUTER for this diagnostic call.",
     )
     _add_format_args(route_parser)
+
+    route_calibrate_parser = sub.add_parser(
+        "route-calibrate",
+        aliases=COMMAND_ALIASES["route-calibrate"],
+        help="Evaluate embedding intent-routing models and recommend threshold/margin.",
+    )
+    route_calibrate_parser.set_defaults(command="route-calibrate")
+    route_calibrate_parser.add_argument(
+        "--models",
+        default="",
+        help="Comma-separated embedding model names. Defaults to known candidates plus the configured model.",
+    )
+    _add_format_args(route_calibrate_parser)
 
     fetch_parser = sub.add_parser("fetch", aliases=COMMAND_ALIASES["fetch"], help="Fetch a URL as markdown.")
     fetch_parser.set_defaults(command="fetch")
@@ -2790,6 +3049,8 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--intent-embedding-api-url", default="", help="Save INTENT_EMBEDDING_API_URL.")
     setup_parser.add_argument("--intent-embedding-api-key", default="", help="Save INTENT_EMBEDDING_API_KEY.")
     setup_parser.add_argument("--intent-embedding-model", default="", help="Save INTENT_EMBEDDING_MODEL.")
+    setup_parser.add_argument("--intent-embedding-threshold", default="", help="Save INTENT_EMBEDDING_THRESHOLD.")
+    setup_parser.add_argument("--intent-embedding-margin", default="", help="Save INTENT_EMBEDDING_MARGIN.")
     setup_parser.add_argument("--intent-classifier-api-url", default="", help="Save INTENT_CLASSIFIER_API_URL.")
     setup_parser.add_argument("--intent-classifier-api-key", default="", help="Save INTENT_CLASSIFIER_API_KEY.")
     setup_parser.add_argument("--intent-classifier-model", default="", help="Save INTENT_CLASSIFIER_MODEL.")

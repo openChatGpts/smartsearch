@@ -261,15 +261,27 @@ Intent router configuration:
 | Key | Purpose |
 | --- | --- |
 | `SMART_SEARCH_INTENT_ROUTER` | `hybrid`, `rules`, or `off`; default `hybrid` |
-| `INTENT_EMBEDDING_API_URL` | Optional OpenAI-compatible embeddings endpoint for semantic capability routing |
+| `INTENT_EMBEDDING_API_URL` | Optional OpenAI-compatible embeddings endpoint for semantic capability routing; recommended setup preset uses `https://api.siliconflow.cn/v1/embeddings` |
 | `INTENT_EMBEDDING_API_KEY` | Optional embeddings API key; masked by `doctor` and config output |
-| `INTENT_EMBEDDING_MODEL` | Embeddings model name |
+| `INTENT_EMBEDDING_MODEL` | Embeddings model name; recommended setup preset uses `Qwen/Qwen3-Embedding-8B` |
+| `INTENT_EMBEDDING_THRESHOLD` | Semantic route threshold, default `0.74`; recommended 8B setup value `0.475`; model-specific |
+| `INTENT_EMBEDDING_MARGIN` | Required top-vs-second semantic margin, default `0.05`; recommended 8B setup value `0.053`; ambiguous matches remain signals only |
 | `INTENT_CLASSIFIER_API_URL` | Optional OpenAI-compatible chat-completions endpoint for structured intent classification |
 | `INTENT_CLASSIFIER_API_KEY` | Optional classifier API key; masked by `doctor` and config output |
 | `INTENT_CLASSIFIER_MODEL` | Classifier model name |
 | `INTENT_ROUTER_TIMEOUT_SECONDS` | Timeout for optional remote router calls, default `8` |
 
-Default `hybrid` is fail-open: if embeddings or classifier settings are missing or fail, routing records `degraded_reason` and falls back to local rules. The classifier may add capabilities, but unknown capability names and provider names are ignored. Providers are still selected only by capability.
+Default `hybrid` is fail-open: if embeddings or classifier settings are missing or fail, routing records `degraded_reason` and falls back to local rules. Semantic routing may add a capability only when the top similarity score is at least `INTENT_EMBEDDING_THRESHOLD` and the top-vs-second score gap is at least `INTENT_EMBEDDING_MARGIN`; otherwise it records an ambiguous signal without adding a capability. The classifier may add capabilities, but unknown capability names and provider names are ignored. Providers are still selected only by capability.
+
+For normal setup, use the Qwen3-Embedding-8B preset: `INTENT_EMBEDDING_API_URL=https://api.siliconflow.cn/v1/embeddings`, `INTENT_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B`, `INTENT_EMBEDDING_THRESHOLD=0.475`, and `INTENT_EMBEDDING_MARGIN=0.053`. `smart-search setup` automatically fills the 8B threshold/margin when the 8B model is selected and those values are not already configured.
+
+Embedding cosine scores are model-specific. Keep `route-calibrate` for advanced re-checks: run it after changing `INTENT_EMBEDDING_MODEL`, changing embedding endpoints, or expanding the real query calibration set:
+
+```powershell
+smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format markdown
+```
+
+Use the report's recommended `INTENT_EMBEDDING_THRESHOLD` and `INTENT_EMBEDDING_MARGIN` before judging routing quality. The primary calibration metric is semantic-only Macro-F1; full-route Macro-F1 is reported to verify rules/classifier fallback behavior.
 
 Important boundaries:
 
@@ -285,7 +297,7 @@ Important boundaries:
 - `TAVILY_API_URL` affects Tavily only. It does not proxy Zhipu. For Tavily Hikari / pooled endpoints, use `https://<host>/api/tavily`; setup normalizes root-host or `/mcp` inputs to that REST base.
 - `FIRECRAWL_API_URL` defaults to `https://api.firecrawl.dev/v2`.
 - AnySearch uses JSON-RPC 2.0 `tools/call` at `https://api.anysearch.com/mcp` by default. It allows anonymous calls when no key is configured, but authenticated calls send `Authorization: Bearer ...`. HTTP 200 responses with `result.isError=true` are treated as provider errors, not as successful evidence.
-- `doctor` reports intent router status as configured/not configured, model names, timeout, and degradation behavior. It does not expose router API keys.
+- `doctor` and `route` report intent router status, embedding model, threshold, margin, their config source, timeout, and degradation behavior. They do not expose router API keys.
 
 Non-interactive setup example:
 
@@ -300,6 +312,12 @@ smart-search setup --non-interactive `
   --validation-level "balanced" `
   --fallback-mode "auto" `
   --minimum-profile "standard" `
+  --intent-router "hybrid" `
+  --intent-embedding-api-url "https://api.siliconflow.cn/v1/embeddings" `
+  --intent-embedding-api-key "your-siliconflow-key" `
+  --intent-embedding-model "Qwen/Qwen3-Embedding-8B" `
+  --intent-embedding-threshold "0.475" `
+  --intent-embedding-margin "0.053" `
   --exa-key "your-exa-key" `
   --context7-key "your-context7-key" `
   --zhipu-key "your-zhipu-key" `
@@ -371,6 +389,7 @@ Provider timeouts:
 | `anysearch-batch` | `as-batch` | Experimental AnySearch batch search, up to 5 queries |
 | `context7-library` | `c7`, `ctx7` | Resolve Context7 library candidates |
 | `context7-docs` | `c7d`, `c7docs`, `ctx7-docs` | Fetch Context7 docs |
+| `route-calibrate` | `route-cal`, `rcal` | Evaluate embedding router models and recommend threshold/margin |
 | `doctor` | `d` | Masked config and connectivity check |
 | `diagnose` | `diag` | Focused OpenAI-compatible troubleshooting report |
 | `setup` | `init` | Interactive or scripted setup |
@@ -384,6 +403,7 @@ Useful examples:
 ```powershell
 smart-search search "query" --validation balanced --extra-sources 3 --timeout 90 --format json --output result.json
 smart-search route "React useEffect API docs" --format markdown
+smart-search route-calibrate --models "Qwen/Qwen3-Embedding-8B" --format markdown
 smart-search research "query" --budget deep --fallback auto --format json --output research.json
 smart-search search "query" --stream --format json
 smart-search search "query" --no-stream --format json
